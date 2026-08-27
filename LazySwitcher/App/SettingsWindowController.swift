@@ -1,174 +1,318 @@
 import AppKit
 
-/// The settings window. AppKit, four tabs, deliberately small.
+/// Settings, in the shape macOS itself uses: a toolbar of panes, one screen of
+/// content each, labels in a right-aligned column.
 ///
-/// The measure is not "how much can be configured" but "does each switch solve a
-/// problem somebody actually has". Punto shipped ninety-six checkboxes and the
-/// complaint was never that it had too few.
-final class SettingsWindowController: NSWindowController, NSWindowDelegate {
+/// Two rules held throughout, both learned from the first version:
+///
+/// **No bare `NSBox()` as a separator.** A default-initialised box is not a rule
+/// — it is a titled box, and its default title localises to «Название». That is
+/// where the stray captions and the strip under them came from.
+///
+/// **A hint is one line or it is not there.** The first version explained the
+/// measurement behind every setting, which is the right content for the docs and
+/// the wrong content for a window somebody opened to change the sound.
+final class SettingsWindowController: NSWindowController, NSToolbarDelegate, NSWindowDelegate {
 
     private weak var app: AppDelegate?
     private let settings = Settings.shared
 
-    private var soundPopUp: NSPopUpButton!
-    private var volumeSlider: NSSlider!
-    private var lengthPopUp: NSPopUpButton!
-    private var unidentifiedCheckbox: NSButton!
-    private var appList: NSTableView!
-    private var appRows: [(bundleID: String, name: String, policy: AppPolicy, locked: Bool)] = []
+    private enum Pane: String, CaseIterable {
+        case general, keys, sound, apps, about
+
+        var title: String { L("settings.tab.\(rawValue)") }
+        var symbol: String {
+            switch self {
+            case .general: return "gearshape"
+            case .keys:    return "keyboard"
+            case .sound:   return "speaker.wave.2"
+            case .apps:    return "app.badge"
+            case .about:   return "info.circle"
+            }
+        }
+    }
+
+    private var panes: [Pane: NSView] = [:]
+    private var current: Pane = .general
+    private let container = NSView()
+
+    // Controls that need refreshing when the world changes underneath them.
+    private var launchCheckbox: NSButton!
+    private var launchHint: NSTextField!
+    private var hotkeyHint: NSTextField!
+    private var updateStatus: NSTextField!
+    private var appRows: [AppRow] = []
+    private var appTable: NSTableView!
+    private var showProtected = false
+
+    private struct AppRow {
+        let bundleID: String
+        let name: String
+        var policy: AppPolicy
+        let locked: Bool
+    }
 
     init(app: AppDelegate) {
         self.app = app
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 560, height: 460),
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 520, height: 300),
                               styleMask: [.titled, .closable], backing: .buffered, defer: false)
-        window.title = L("settings.window.title")
         window.center()
+        window.isReleasedWhenClosed = false
         super.init(window: window)
         window.delegate = self
         build()
+        show(.general)
     }
 
     required init?(coder: NSCoder) { fatalError("not used") }
 
-    /// The user may have changed Login Items in System Settings while this
-    /// window was closed, so the state is re-read every time it appears.
+    func showAboutPane() { show(.about) }
+
     override func showWindow(_ sender: Any?) {
         super.showWindow(sender)
         refreshLaunchState()
+        reloadApps()
+        window?.makeKeyAndOrderFront(nil)
     }
 
-    // MARK: - Layout
+    // MARK: - Chrome
 
     private func build() {
         guard let window else { return }
-        let tabs = NSTabView()
-        tabs.translatesAutoresizingMaskIntoConstraints = false
+        let toolbar = NSToolbar(identifier: "settings")
+        toolbar.delegate = self
+        toolbar.displayMode = .iconAndLabel
+        toolbar.allowsUserCustomization = false
+        window.toolbar = toolbar
+        window.toolbarStyle = .preference
 
-        tabs.addTabViewItem(tab(L("settings.tab.general"), view: generalTab()))
-        tabs.addTabViewItem(tab(L("settings.tab.keys"), view: keysTab()))
-        tabs.addTabViewItem(tab(L("settings.tab.sound"), view: soundTab()))
-        tabs.addTabViewItem(tab(L("settings.tab.apps"), view: appsTab()))
-        tabs.addTabViewItem(tab(L("settings.tab.updates"), view: updatesTab()))
-
+        container.translatesAutoresizingMaskIntoConstraints = false
         let content = NSView()
-        content.addSubview(tabs)
+        content.addSubview(container)
         window.contentView = content
         NSLayoutConstraint.activate([
-            tabs.topAnchor.constraint(equalTo: content.topAnchor, constant: 12),
-            tabs.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 12),
-            tabs.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -12),
-            tabs.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -12),
+            container.topAnchor.constraint(equalTo: content.topAnchor),
+            container.leadingAnchor.constraint(equalTo: content.leadingAnchor),
+            container.trailingAnchor.constraint(equalTo: content.trailingAnchor),
+            container.bottomAnchor.constraint(equalTo: content.bottomAnchor),
         ])
+
+        panes[.general] = generalPane()
+        panes[.keys] = keysPane()
+        panes[.sound] = soundPane()
+        panes[.apps] = appsPane()
+        panes[.about] = aboutPane()
     }
 
-    private func tab(_ title: String, view: NSView) -> NSTabViewItem {
-        let item = NSTabViewItem()
-        item.label = title
-        item.view = view
+    func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
+        Pane.allCases.map { NSToolbarItem.Identifier($0.rawValue) }
+    }
+    func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
+        toolbarAllowedItemIdentifiers(toolbar)
+    }
+    func toolbarSelectableItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
+        toolbarAllowedItemIdentifiers(toolbar)
+    }
+
+    func toolbar(_ toolbar: NSToolbar, itemForItemIdentifier identifier: NSToolbarItem.Identifier,
+                 willBeInsertedIntoToolbar flag: Bool) -> NSToolbarItem? {
+        guard let pane = Pane(rawValue: identifier.rawValue) else { return nil }
+        let item = NSToolbarItem(itemIdentifier: identifier)
+        item.label = pane.title
+        item.image = NSImage(systemSymbolName: pane.symbol, accessibilityDescription: pane.title)
+        item.target = self
+        item.action = #selector(selectPane(_:))
         return item
     }
 
-    private func column(_ views: [NSView], spacing: CGFloat = 10) -> NSStackView {
-        let stack = NSStackView(views: views)
-        stack.orientation = .vertical
-        stack.alignment = .leading
-        stack.spacing = spacing
-        stack.translatesAutoresizingMaskIntoConstraints = false
-        stack.edgeInsets = NSEdgeInsets(top: 18, left: 18, bottom: 18, right: 18)
-        return stack
+    @objc private func selectPane(_ sender: NSToolbarItem) {
+        guard let pane = Pane(rawValue: sender.itemIdentifier.rawValue) else { return }
+        show(pane)
     }
 
-    private func hint(_ text: String) -> NSTextField {
-        let label = NSTextField(wrappingLabelWithString: text)
-        label.font = .systemFont(ofSize: 11)
-        label.textColor = .secondaryLabelColor
-        label.preferredMaxLayoutWidth = 480
-        return label
+    private func show(_ pane: Pane) {
+        guard let window, let view = panes[pane] else { return }
+        current = pane
+        window.toolbar?.selectedItemIdentifier = NSToolbarItem.Identifier(pane.rawValue)
+        window.title = pane.title
+
+        container.subviews.forEach { $0.removeFromSuperview() }
+        view.translatesAutoresizingMaskIntoConstraints = false
+        container.addSubview(view)
+        NSLayoutConstraint.activate([
+            view.topAnchor.constraint(equalTo: container.topAnchor),
+            view.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            view.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            view.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+        ])
+
+        // Resize the window to the pane rather than padding every pane to the
+        // largest. This is what System Settings does, and it is the difference
+        // between "compact" and "mostly empty".
+        let size = view.fittingSize
+        var frame = window.frame
+        let delta = window.frameRect(forContentRect: NSRect(origin: .zero, size: size)).size
+        frame.origin.y += frame.height - delta.height
+        frame.size = delta
+        window.setFrame(frame, display: true, animate: window.isVisible)
+    }
+
+    // MARK: - Layout helpers
+
+    /// A settings row: right-aligned label, control, optional one-line hint.
+    private func row(_ label: String, _ control: NSView, hint: String? = nil) -> [NSView] {
+        let title = NSTextField(labelWithString: label)
+        title.alignment = .right
+        title.textColor = .labelColor
+        var right: NSView = control
+        if let hint {
+            let note = NSTextField(labelWithString: hint)
+            note.font = .systemFont(ofSize: 11)
+            note.textColor = .secondaryLabelColor
+            let stack = NSStackView(views: [control, note])
+            stack.orientation = .vertical
+            stack.alignment = .leading
+            stack.spacing = 3
+            right = stack
+        }
+        return [title, right]
+    }
+
+    private func grid(_ rows: [[NSView]], width: CGFloat = 480) -> NSView {
+        let g = NSGridView(views: rows)
+        g.translatesAutoresizingMaskIntoConstraints = false
+        g.rowSpacing = 12
+        g.columnSpacing = 12
+        g.column(at: 0).xPlacement = .trailing
+        g.column(at: 0).width = 150
+        for index in 0..<g.numberOfRows { g.row(at: index).yPlacement = .center }
+
+        let host = NSView()
+        host.addSubview(g)
+        NSLayoutConstraint.activate([
+            g.topAnchor.constraint(equalTo: host.topAnchor, constant: 24),
+            g.leadingAnchor.constraint(equalTo: host.leadingAnchor, constant: 20),
+            g.trailingAnchor.constraint(lessThanOrEqualTo: host.trailingAnchor, constant: -20),
+            g.bottomAnchor.constraint(equalTo: host.bottomAnchor, constant: -24),
+            host.widthAnchor.constraint(greaterThanOrEqualToConstant: width),
+        ])
+        return host
+    }
+
+    private func spacer() -> NSView {
+        let v = NSView()
+        v.translatesAutoresizingMaskIntoConstraints = false
+        v.heightAnchor.constraint(equalToConstant: 1).isActive = true
+        return v
     }
 
     // MARK: - General
 
-    private var launchCheckbox: NSButton!
-    private var launchHint: NSTextField!
-
-    private func generalTab() -> NSView {
+    private func generalPane() -> NSView {
         launchCheckbox = NSButton(checkboxWithTitle: L("settings.launchAtLogin"),
                                   target: self, action: #selector(toggleLaunchAtLogin(_:)))
-        launchHint = hint("")
-        refreshLaunchState()
+        launchHint = NSTextField(labelWithString: "")
+        launchHint.font = .systemFont(ofSize: 11)
+        launchHint.textColor = .secondaryLabelColor
+        launchHint.lineBreakMode = .byWordWrapping
+        launchHint.maximumNumberOfLines = 2
+        launchHint.preferredMaxLayoutWidth = 320
 
         let automatic = NSButton(checkboxWithTitle: L("settings.automatic"),
                                  target: self, action: #selector(toggleAutomatic(_:)))
         automatic.state = settings.automaticEnabled ? .on : .off
 
-        lengthPopUp = NSPopUpButton()
-        for length in 4...8 { lengthPopUp.addItem(withTitle: L("settings.minimumLength.option", length)) }
-        lengthPopUp.selectItem(at: settings.minimumLength - 4)
-        lengthPopUp.target = self
-        lengthPopUp.action = #selector(changeLength(_:))
-
-        let lengthRow = NSStackView(views: [NSTextField(labelWithString: L("settings.minimumLength")), lengthPopUp])
-        lengthRow.orientation = .horizontal
-        lengthRow.spacing = 8
+        let length = NSPopUpButton()
+        for value in 4...8 { length.addItem(withTitle: L("settings.minimumLength.option", value)) }
+        length.selectItem(at: settings.minimumLength - 4)
+        length.target = self
+        length.action = #selector(changeLength(_:))
 
         let switchLayout = NSButton(checkboxWithTitle: L("settings.switchLayout"),
                                     target: self, action: #selector(toggleSwitchLayout(_:)))
         switchLayout.state = settings.switchLayoutAfterReplacement ? .on : .off
 
-        return column([
-            launchCheckbox,
-            launchHint,
-            NSBox(),
-            automatic,
-            lengthRow,
-            hint(L("settings.minimumLength.hint")),
-            switchLayout,
-        ])
+        let launchStack = NSStackView(views: [launchCheckbox, launchHint])
+        launchStack.orientation = .vertical
+        launchStack.alignment = .leading
+        launchStack.spacing = 3
+
+        refreshLaunchState()
+
+        // Shown only when access is granted on paper and dead in practice. The
+        // person receiving this app has no other way out of that state: the
+        // system dialog offers "Open Settings" and "Deny", and neither helps,
+        // because the checkbox is already on. Only `tccutil reset` clears it.
+        let permissions = Permissions.current(runProbe: false)
+        var rows: [[NSView]] = []
+        if permissions.looksStuck {
+            let explain = NSTextField(wrappingLabelWithString: L("settings.permissions.stuck"))
+            explain.font = .systemFont(ofSize: 11)
+            explain.textColor = .secondaryLabelColor
+            explain.preferredMaxLayoutWidth = 320
+            let copy = NSButton(title: L("settings.permissions.copyCommand"),
+                                target: self, action: #selector(copyResetCommand(_:)))
+            let box = NSStackView(views: [explain, copy])
+            box.orientation = .vertical
+            box.alignment = .leading
+            box.spacing = 6
+            rows.append(row(L("settings.permissions.label"), box))
+        }
+
+        rows += [
+            row(L("settings.row.startup"), launchStack),
+            row(L("settings.row.correction"), automatic),
+            row(L("settings.minimumLength"), length, hint: L("settings.minimumLength.hint")),
+            row("", switchLayout),
+        ]
+        return grid(rows)
     }
 
-    /// Re-reads from the system rather than trusting what we last set.
+    @objc private func copyResetCommand(_ sender: Any?) {
+        let command = "tccutil reset Accessibility com.lazyswitcher.app && "
+                    + "tccutil reset ListenEvent com.lazyswitcher.app && "
+                    + "tccutil reset PostEvent com.lazyswitcher.app"
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(command, forType: .string)
+        (sender as? NSButton)?.title = L("settings.permissions.copied")
+    }
+
     private func refreshLaunchState() {
+        guard launchCheckbox != nil else { return }
         let state = LaunchAtLogin.current
         launchCheckbox.state = state.isOn ? .on : .off
+        launchCheckbox.isEnabled = true
         switch state {
         case .enabled:
-            launchCheckbox.isEnabled = true
             launchHint.stringValue = ""
         case .disabled:
-            launchCheckbox.isEnabled = true
             launchHint.stringValue = LaunchAtLogin.isInApplicationsFolder ? ""
                 : L("settings.launchAtLogin.notInApplications")
         case .requiresApproval:
-            launchCheckbox.isEnabled = true
             launchHint.stringValue = L("settings.launchAtLogin.needsApproval")
         case .unavailable(let reason):
             launchCheckbox.isEnabled = false
-            let text = reason == .notFound ? L("launchAtLogin.reason.notFound")
-                                           : L("launchAtLogin.reason.unknown")
-            launchHint.stringValue = L("settings.launchAtLogin.unavailable", text)
+            launchHint.stringValue = L("settings.launchAtLogin.unavailable",
+                                       reason == .notFound ? L("launchAtLogin.reason.notFound")
+                                                           : L("launchAtLogin.reason.unknown"))
         }
     }
 
     @objc private func toggleLaunchAtLogin(_ sender: NSButton) {
-        let wanted = sender.state == .on
-        if case .failure(let error) = LaunchAtLogin.set(wanted) {
+        if case .failure(let error) = LaunchAtLogin.set(sender.state == .on) {
             launchHint.stringValue = L("settings.launchAtLogin.failed", error.localizedDescription)
             NSSound.beep()
         }
-        // Whatever we asked for, show what the system actually did.
         refreshLaunchState()
     }
-
     @objc private func toggleAutomatic(_ sender: NSButton) {
         settings.automaticEnabled = sender.state == .on
         app?.settingsDidChange()
     }
-
     @objc private func changeLength(_ sender: NSPopUpButton) {
         settings.minimumLength = sender.indexOfSelectedItem + 4
         app?.settingsDidChange()
     }
-
     @objc private func toggleSwitchLayout(_ sender: NSButton) {
         settings.switchLayoutAfterReplacement = sender.state == .on
         app?.settingsDidChange()
@@ -176,27 +320,30 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
 
     // MARK: - Keys
 
-    private var hotkeyPopUp: NSPopUpButton!
-    private var hotkeyHint: NSTextField!
+    private func keysPane() -> NSView {
+        let popUp = NSPopUpButton()
+        for style in HotkeyStyle.allCases { popUp.addItem(withTitle: style.title) }
+        popUp.selectItem(at: HotkeyStyle.allCases.firstIndex(of: settings.hotkeyStyle) ?? 0)
+        popUp.target = self
+        popUp.action = #selector(changeHotkey(_:))
 
-    private func keysTab() -> NSView {
-        hotkeyPopUp = NSPopUpButton()
-        for style in HotkeyStyle.allCases { hotkeyPopUp.addItem(withTitle: style.title) }
-        hotkeyPopUp.selectItem(at: HotkeyStyle.allCases.firstIndex(of: settings.hotkeyStyle) ?? 0)
-        hotkeyPopUp.target = self
-        hotkeyPopUp.action = #selector(changeHotkey(_:))
+        hotkeyHint = NSTextField(wrappingLabelWithString: settings.hotkeyStyle.explanation)
+        hotkeyHint.font = .systemFont(ofSize: 11)
+        hotkeyHint.textColor = .secondaryLabelColor
+        hotkeyHint.preferredMaxLayoutWidth = 320
 
-        let row = NSStackView(views: [NSTextField(labelWithString: L("settings.keys.action")), hotkeyPopUp])
-        row.orientation = .horizontal
-        row.spacing = 8
+        let what = NSTextField(wrappingLabelWithString: L("settings.keys.what"))
+        what.font = .systemFont(ofSize: 11)
+        what.textColor = .secondaryLabelColor
+        what.preferredMaxLayoutWidth = 320
 
-        hotkeyHint = hint(settings.hotkeyStyle.explanation)
+        let pause = NSTextField(labelWithString: L("settings.keys.pause"))
 
-        return column([
-            row,
-            hotkeyHint,
-            NSBox(),
-            hint(L("settings.keys.hint")),
+        return grid([
+            row(L("settings.keys.action"), popUp),
+            row("", hotkeyHint),
+            row(L("settings.keys.does"), what),
+            row(L("settings.keys.pauseLabel"), pause),
         ])
     }
 
@@ -207,41 +354,225 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         app?.settingsDidChange()
     }
 
-    // MARK: - Updates
+    // MARK: - Sound
 
-    private var updateStatus: NSTextField!
+    private func soundPane() -> NSView {
+        let enabled = NSButton(checkboxWithTitle: L("settings.sound.enabled"),
+                               target: self, action: #selector(toggleSound(_:)))
+        enabled.state = settings.soundEnabled ? .on : .off
 
-    private func updatesTab() -> NSView {
-        let automatic = NSButton(checkboxWithTitle: L("settings.updates.automatic"),
-                                 target: self, action: #selector(toggleAutoUpdates(_:)))
-        automatic.state = settings.checkUpdatesAutomatically ? .on : .off
+        let popUp = NSPopUpButton()
+        popUp.addItems(withTitles: Settings.availableSounds)
+        popUp.selectItem(withTitle: settings.soundName)
+        popUp.target = self
+        popUp.action = #selector(changeSound(_:))
 
-        let checkNow = NSButton(title: L("settings.updates.checkNow"), target: self, action: #selector(checkNow(_:)))
-        let openPage = NSButton(title: L("settings.updates.openPage"),
-                                target: self, action: #selector(openReleases(_:)))
+        let slider = NSSlider(value: Double(settings.soundVolume), minValue: 0, maxValue: 1,
+                              target: self, action: #selector(changeVolume(_:)))
+        slider.widthAnchor.constraint(equalToConstant: 180).isActive = true
+
+        return grid([
+            row(L("settings.row.signal"), enabled),
+            row(L("settings.sound.choose"), popUp, hint: L("settings.sound.hint")),
+            row(L("settings.sound.volume"), slider),
+        ])
+    }
+
+    @objc private func toggleSound(_ sender: NSButton) { settings.soundEnabled = sender.state == .on }
+    @objc private func changeSound(_ sender: NSPopUpButton) {
+        settings.soundName = sender.titleOfSelectedItem ?? "Tink"
+        settings.playFeedbackSound()
+    }
+    @objc private func changeVolume(_ sender: NSSlider) {
+        settings.soundVolume = Float(sender.doubleValue)
+        settings.playFeedbackSound()
+    }
+
+    // MARK: - Apps
+
+    private func appsPane() -> NSView {
+        let unidentified = NSButton(checkboxWithTitle: L("settings.apps.unidentified"),
+                                    target: self, action: #selector(toggleUnidentified(_:)))
+        unidentified.state = settings.actInUnidentifiedFields ? .on : .off
+        let unidentifiedHint = NSTextField(wrappingLabelWithString: L("settings.apps.unidentified.hint"))
+        unidentifiedHint.font = .systemFont(ofSize: 11)
+        unidentifiedHint.textColor = .secondaryLabelColor
+        unidentifiedHint.preferredMaxLayoutWidth = 320
+
+        appTable = NSTableView()
+        appTable.headerView = nil
+        appTable.rowHeight = 26
+        appTable.style = .inset
+        appTable.dataSource = self
+        appTable.delegate = self
+        let name = NSTableColumn(identifier: .init("app")); name.width = 200
+        let mode = NSTableColumn(identifier: .init("policy")); mode.width = 150
+        appTable.addTableColumn(name)
+        appTable.addTableColumn(mode)
+
+        let scroll = NSScrollView()
+        scroll.documentView = appTable
+        scroll.hasVerticalScroller = true
+        scroll.borderType = .lineBorder
+        scroll.translatesAutoresizingMaskIntoConstraints = false
+        scroll.heightAnchor.constraint(equalToConstant: 160).isActive = true
+        scroll.widthAnchor.constraint(equalToConstant: 330).isActive = true
+
+        let toggle = NSButton(checkboxWithTitle: L("settings.apps.showProtected"),
+                              target: self, action: #selector(toggleProtected(_:)))
+        toggle.state = .off
+        toggle.font = .systemFont(ofSize: 11)
+
+        let stack = NSStackView(views: [scroll, toggle])
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 6
+
+        let unidentifiedStack = NSStackView(views: [unidentified, unidentifiedHint])
+        unidentifiedStack.orientation = .vertical
+        unidentifiedStack.alignment = .leading
+        unidentifiedStack.spacing = 3
+
+        reloadApps()
+        return grid([
+            row(L("settings.apps.title"), stack),
+            row(L("settings.apps.risky"), unidentifiedStack),
+        ])
+    }
+
+    @objc private func toggleUnidentified(_ sender: NSButton) {
+        settings.actInUnidentifiedFields = sender.state == .on
+        app?.settingsDidChange()
+    }
+
+    @objc private func toggleProtected(_ sender: NSButton) {
+        showProtected = sender.state == .on
+        reloadApps()
+    }
+
+    /// Running apps only, and by default only the ones worth showing.
+    ///
+    /// The first version listed every locked exclusion whether it was running or
+    /// not, which made the longest list in the app out of rows nobody can change.
+    /// They are one checkbox away for anyone who wants the reassurance.
+    private func reloadApps() {
+        guard appTable != nil, let policies = app?.policies else { return }
+        var rows: [AppRow] = []
+        var seen = Set<String>()
+        for running in NSWorkspace.shared.runningApplications where running.activationPolicy == .regular {
+            guard let id = running.bundleIdentifier, seen.insert(id).inserted else { continue }
+            let locked = policies.isLocked(id)
+            if locked && !showProtected { continue }
+            rows.append(AppRow(bundleID: id, name: running.localizedName ?? id,
+                               policy: policies.policy(for: id), locked: locked))
+        }
+        appRows = rows.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+        appTable.reloadData()
+    }
+
+    // MARK: - About
+
+    private var bannerView: NSImageView?
+    private var bannerRow: NSStackView?
+
+    private func aboutPane() -> NSView {
+        let stack = NSStackView()
+        stack.orientation = .vertical
+        stack.alignment = .centerX
+        stack.spacing = 14
+        stack.edgeInsets = NSEdgeInsets(top: 22, left: 22, bottom: 22, right: 22)
+        stack.translatesAutoresizingMaskIntoConstraints = false
+
+        if let banner = NSImage(named: "Banner") {
+            let image = NSImageView(image: banner)
+            image.imageScaling = .scaleProportionallyUpOrDown
+            image.translatesAutoresizingMaskIntoConstraints = false
+            image.widthAnchor.constraint(equalToConstant: 460).isActive = true
+            image.heightAnchor.constraint(equalToConstant: 230).isActive = true
+            image.wantsLayer = true
+            image.layer?.cornerRadius = 10
+            image.layer?.masksToBounds = true
+
+            let hide = NSButton(title: L("about.hideBanner"), target: self,
+                                action: #selector(toggleBanner(_:)))
+            hide.bezelStyle = .accessoryBarAction
+            hide.controlSize = .small
+
+            let row = NSStackView(views: [image, hide])
+            row.orientation = .vertical
+            row.alignment = .centerX
+            row.spacing = 6
+            bannerView = image
+            bannerRow = row
+            stack.addArrangedSubview(row)
+            row.isHidden = settings.bannerHidden
+        }
+
+        let name = NSTextField(labelWithString: "Lazy Switcher")
+        name.font = .systemFont(ofSize: 20, weight: .semibold)
+
+        let version = NSTextField(labelWithString: L("about.version", UpdateChecker.currentVersion))
+        version.font = .systemFont(ofSize: 11)
+        version.textColor = .secondaryLabelColor
+
+        let facts = NSTextField(wrappingLabelWithString: L("about.facts"))
+        facts.font = .systemFont(ofSize: 11)
+        facts.textColor = .secondaryLabelColor
+        facts.alignment = .center
+        facts.preferredMaxLayoutWidth = 420
+
+        updateStatus = NSTextField(labelWithString: "")
+        updateStatus.font = .systemFont(ofSize: 11)
+        updateStatus.textColor = .secondaryLabelColor
+
+        let checkNow = NSButton(title: L("settings.updates.checkNow"), target: self,
+                                action: #selector(checkNow(_:)))
+        let openPage = NSButton(title: L("settings.updates.openPage"), target: self,
+                                action: #selector(openReleases(_:)))
         let buttons = NSStackView(views: [checkNow, openPage])
         buttons.orientation = .horizontal
         buttons.spacing = 8
 
-        updateStatus = NSTextField(labelWithString: L("settings.updates.version", UpdateChecker.currentVersion))
+        let auto = NSButton(checkboxWithTitle: L("settings.updates.automatic"),
+                            target: self, action: #selector(toggleAutoUpdates(_:)))
+        auto.state = settings.checkUpdatesAutomatically ? .on : .off
+        auto.font = .systemFont(ofSize: 11)
 
-        return column([
-            updateStatus,
-            buttons,
-            NSBox(),
-            automatic,
-            hint(L("settings.updates.hint")),
-        ])
+        let showBanner = NSButton(title: L("about.showBanner"), target: self,
+                                  action: #selector(toggleBanner(_:)))
+        showBanner.bezelStyle = .accessoryBarAction
+        showBanner.controlSize = .small
+        showBanner.isHidden = !settings.bannerHidden
+        bannerToggleButton = showBanner
+
+        let links = NSTextField(wrappingLabelWithString: L("about.links"))
+        links.font = .systemFont(ofSize: 11)
+        links.textColor = .tertiaryLabelColor
+        links.alignment = .center
+        links.preferredMaxLayoutWidth = 420
+
+        let rows: [NSView] = [name, version, showBanner, facts, buttons, auto, updateStatus, links]
+        for view in rows {
+            stack.addArrangedSubview(view)
+        }
+        return stack
+    }
+
+    private var bannerToggleButton: NSButton?
+
+    @objc private func toggleBanner(_ sender: Any?) {
+        settings.bannerHidden.toggle()
+        bannerRow?.isHidden = settings.bannerHidden
+        bannerToggleButton?.isHidden = !settings.bannerHidden
+        if current == .about { show(.about) }
     }
 
     @objc private func toggleAutoUpdates(_ sender: NSButton) {
         settings.checkUpdatesAutomatically = sender.state == .on
     }
-
     @objc private func openReleases(_ sender: Any?) {
         NSWorkspace.shared.open(UpdateChecker.releasesPage)
     }
-
     @objc private func checkNow(_ sender: Any?) {
         updateStatus.stringValue = L("settings.updates.checking")
         UpdateChecker.check { [weak self] outcome in
@@ -255,111 +586,6 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
                 updateStatus.stringValue = L("settings.updates.failed", reason)
             }
         }
-    }
-
-    // MARK: - Sound
-
-    private func soundTab() -> NSView {
-        let enabled = NSButton(checkboxWithTitle: L("settings.sound.enabled"),
-                               target: self, action: #selector(toggleSound(_:)))
-        enabled.state = settings.soundEnabled ? .on : .off
-
-        soundPopUp = NSPopUpButton()
-        soundPopUp.addItems(withTitles: Settings.availableSounds)
-        soundPopUp.selectItem(withTitle: settings.soundName)
-        soundPopUp.target = self
-        soundPopUp.action = #selector(changeSound(_:))
-
-        let preview = NSButton(title: L("settings.sound.preview"), target: self, action: #selector(previewSound(_:)))
-        let soundRow = NSStackView(views: [NSTextField(labelWithString: L("settings.sound.choose")), soundPopUp, preview])
-        soundRow.orientation = .horizontal
-        soundRow.spacing = 8
-
-        volumeSlider = NSSlider(value: Double(settings.soundVolume), minValue: 0, maxValue: 1,
-                                target: self, action: #selector(changeVolume(_:)))
-        volumeSlider.widthAnchor.constraint(equalToConstant: 200).isActive = true
-        let volumeRow = NSStackView(views: [NSTextField(labelWithString: L("settings.sound.volume")), volumeSlider])
-        volumeRow.orientation = .horizontal
-        volumeRow.spacing = 8
-
-        return column([
-            enabled, soundRow, volumeRow,
-            hint(L("settings.sound.hint")),
-        ])
-    }
-
-    @objc private func toggleSound(_ sender: NSButton) { settings.soundEnabled = sender.state == .on }
-    @objc private func changeSound(_ sender: NSPopUpButton) {
-        settings.soundName = sender.titleOfSelectedItem ?? "Tink"
-        settings.playFeedbackSound()
-    }
-    @objc private func changeVolume(_ sender: NSSlider) {
-        settings.soundVolume = Float(sender.doubleValue)
-    }
-    @objc private func previewSound(_ sender: Any?) { settings.playFeedbackSound() }
-
-    // MARK: - Apps
-
-    private func appsTab() -> NSView {
-        unidentifiedCheckbox = NSButton(
-            checkboxWithTitle: L("settings.apps.unidentified"),
-            target: self, action: #selector(toggleUnidentified(_:)))
-        unidentifiedCheckbox.state = settings.actInUnidentifiedFields ? .on : .off
-
-        appList = NSTableView()
-        appList.addTableColumn({
-            let c = NSTableColumn(identifier: .init("app")); c.title = L("settings.apps.column.app"); c.width = 260; return c
-        }())
-        appList.addTableColumn({
-            let c = NSTableColumn(identifier: .init("policy")); c.title = L("settings.apps.column.mode"); c.width = 200; return c
-        }())
-        appList.dataSource = self
-        appList.delegate = self
-        appList.rowHeight = 22
-
-        let scroll = NSScrollView()
-        scroll.documentView = appList
-        scroll.hasVerticalScroller = true
-        scroll.translatesAutoresizingMaskIntoConstraints = false
-        scroll.heightAnchor.constraint(equalToConstant: 210).isActive = true
-        scroll.widthAnchor.constraint(equalToConstant: 500).isActive = true
-
-        reloadApps()
-
-        return column([
-            unidentifiedCheckbox,
-            hint(L("settings.apps.unidentified.hint")),
-            NSTextField(labelWithString: L("settings.apps.title")),
-            scroll,
-            hint(L("settings.apps.locked.hint")),
-        ])
-    }
-
-    @objc private func toggleUnidentified(_ sender: NSButton) {
-        settings.actInUnidentifiedFields = sender.state == .on
-        app?.settingsDidChange()
-        reloadApps()
-    }
-
-    private func reloadApps() {
-        var rows: [(String, String, AppPolicy, Bool)] = []
-        var seen = Set<String>()
-
-        for running in NSWorkspace.shared.runningApplications
-        where running.activationPolicy == .regular {
-            guard let id = running.bundleIdentifier, seen.insert(id).inserted else { continue }
-            rows.append((id, running.localizedName ?? id,
-                         app?.policies.policy(for: id) ?? .automatic,
-                         app?.policies.isLocked(id) ?? false))
-        }
-        // Locked apps that are not running still belong in the list: seeing that
-        // Terminal is permanently excluded is the reassurance, and it is useless
-        // if it only appears while Terminal happens to be open.
-        for id in AppPolicyStore.lockedExclusions.sorted() where seen.insert(id).inserted {
-            rows.append((id, id, .disabled, true))
-        }
-        appRows = rows.sorted { $0.1.localizedCaseInsensitiveCompare($1.1) == .orderedAscending }
-        appList.reloadData()
     }
 }
 
@@ -375,6 +601,13 @@ extension SettingsWindowController: NSTableViewDataSource, NSTableViewDelegate {
         if tableColumn?.identifier.rawValue == "app" {
             let label = NSTextField(labelWithString: entry.locked ? "🔒 \(entry.name)" : entry.name)
             label.font = .systemFont(ofSize: 12)
+            label.lineBreakMode = .byTruncatingTail
+            return label
+        }
+        if entry.locked {
+            let label = NSTextField(labelWithString: L("settings.apps.mode.disabled"))
+            label.font = .systemFont(ofSize: 11)
+            label.textColor = .tertiaryLabelColor
             return label
         }
         let popUp = NSPopUpButton()
@@ -382,19 +615,19 @@ extension SettingsWindowController: NSTableViewDataSource, NSTableViewDelegate {
                                     L("settings.apps.mode.hotkeyOnly"),
                                     L("settings.apps.mode.automatic")])
         popUp.selectItem(at: Int(entry.policy.rawValue))
-        popUp.isEnabled = !entry.locked
         popUp.tag = row
         popUp.target = self
         popUp.action = #selector(changePolicy(_:))
         popUp.font = .systemFont(ofSize: 11)
+        popUp.controlSize = .small
+        popUp.isBordered = false
         return popUp
     }
 
     @objc private func changePolicy(_ sender: NSPopUpButton) {
         let entry = appRows[sender.tag]
-        guard let policy = AppPolicy(rawValue: UInt8(sender.indexOfSelectedItem)) else { return }
-        guard app?.policies.setPolicy(policy, for: entry.bundleID) == true else {
-            // Locked. Put the menu back where it was rather than lying about it.
+        guard let policy = AppPolicy(rawValue: UInt8(sender.indexOfSelectedItem)),
+              app?.policies.setPolicy(policy, for: entry.bundleID) == true else {
             sender.selectItem(at: Int(entry.policy.rawValue))
             NSSound.beep()
             return

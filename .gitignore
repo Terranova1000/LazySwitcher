@@ -19,3 +19,7 @@ Tools/build-models/work/
 __pycache__/
 
 .DS_Store
+
+# Ассеты подключены копией в LazySwitcher/Assets.xcassets
+LazySwitcher-macOS-icons/
+banner-LazySwitcher.png

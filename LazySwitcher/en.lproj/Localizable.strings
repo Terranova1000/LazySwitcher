@@ -46,35 +46,33 @@
 
 /* Settings — general */
 "settings.launchAtLogin" = "Launch at login";
-"settings.launchAtLogin.notInApplications" = "The app is not running from the Applications folder. Launching at login is unreliable from anywhere else — move it there.";
-"settings.launchAtLogin.needsApproval" = "One step left: confirm in System Settings → General → Login Items.";
+"settings.launchAtLogin.notInApplications" = "Move the app to Applications — launching at login is unreliable elsewhere.";
+"settings.launchAtLogin.needsApproval" = "Confirm in System Settings → Login Items.";
 "settings.launchAtLogin.unavailable" = "Launch at login is unavailable: %@";
 "settings.launchAtLogin.failed" = "Failed: %@";
 "settings.automatic" = "Correct automatically";
-"settings.minimumLength" = "Minimum word length:";
-"settings.minimumLength.option" = "%d characters or more";
-"settings.minimumLength.hint" = "At five characters, false positives measured zero across 25,000 words; at four, roughly one word in a hundred and fifteen. Shorter words are still corrected when the following word confirms the layout.";
-"settings.switchLayout" = "Switch keyboard layout after correcting";
-
+"settings.minimumLength" = "At least";
+"settings.minimumLength.option" = "%d characters";
+"settings.minimumLength.hint" = "Shorter words are corrected when the next word confirms the layout.";
+"settings.switchLayout" = "Switch layout after correcting";
 /* Settings — keys */
-"settings.keys.action" = "Correct:";
+"settings.keys.action" = "Gesture";
 "settings.keys.hint" = "The gesture does different things depending on the situation:\n• text is selected — the whole selection is converted;\n• a correction just happened — it is undone, and the word is remembered as “never change”;\n• otherwise — the last word is corrected.\n\nLeft and right Shift together pauses the app. That gesture does not move with the setting above: it is what you reach for when something has gone wrong, so it has to be the same one always.";
 
 /* Settings — sound */
 "settings.sound.enabled" = "Play a sound when correcting";
-"settings.sound.choose" = "Sound:";
+"settings.sound.choose" = "Sound";
 "settings.sound.preview" = "Play";
-"settings.sound.volume" = "Volume:";
-"settings.sound.hint" = "A sound is the cheapest way to notice that the text changed without looking away from what you are typing. If it grates, turn it off — the menu bar icon blinks either way.";
-
+"settings.sound.volume" = "Volume";
+"settings.sound.hint" = "The icon blinks with the sound off too.";
 /* Settings — apps */
-"settings.apps.unidentified" = "Also work where the field type cannot be determined";
-"settings.apps.unidentified.hint" = "⚠️ Chrome and Firefox give no indication whatsoever that a field is a password field — neither through the accessibility tree nor through the macOS secure input mode. This was measured, not assumed. While this box is unchecked, only your chosen gesture works there, and you decide where to press it. Turn it on and automatic correction becomes able to fire inside a password field.";
-"settings.apps.title" = "Applications";
+"settings.apps.unidentified" = "Also work where the field is unidentified";
+"settings.apps.unidentified.hint" = "Chrome and Firefox give no sign of a password field. While off, only the gesture works there.";
+"settings.apps.title" = "Where it works";
 "settings.apps.column.app" = "Application";
 "settings.apps.column.mode" = "Mode";
 "settings.apps.mode.disabled" = "off";
-"settings.apps.mode.hotkeyOnly" = "gesture only";
+"settings.apps.mode.hotkeyOnly" = "gesture";
 "settings.apps.mode.automatic" = "automatic";
 "settings.apps.locked.hint" = "Terminals, password managers and virtual machines are marked with a lock and cannot be changed.";
 
@@ -82,7 +80,7 @@
 "settings.updates.version" = "Version %@";
 "settings.updates.checkNow" = "Check now";
 "settings.updates.openPage" = "Open the downloads page";
-"settings.updates.automatic" = "Check for updates once a week";
+"settings.updates.automatic" = "Check for updates weekly";
 "settings.updates.checking" = "Checking…";
 "settings.updates.upToDate" = "You have the latest version (%@)";
 "settings.updates.available" = "Version %1$@ is out; you have %2$@";
@@ -92,17 +90,55 @@
 /* First run */
 "onboarding.window.title" = "First run";
 "onboarding.step1.title" = "Lazy Switcher";
-"onboarding.step1.body" = "Spots text typed in the wrong keyboard layout and fixes it.\n\nghbdtn  →  привет\nруддщ   →  hello\n\nIt switches the layout too, so the rest of the sentence comes out right.\n\nFree. Runs on your machine. Nothing you type is written to disk or sent anywhere.";
+"onboarding.step1.body" = "Spots a word typed in the wrong keyboard layout and fixes it.
+
+ghbdtn → привет     руддщ → hello
+
+It switches the layout too, so the rest of the sentence comes out right.";
 "onboarding.step1.primary" = "Next";
 "onboarding.step2.title" = "Permission needed";
-"onboarding.step2.body" = "macOS will not let a program see what you type without your consent. That is as it should be, and here is what the consent means in practice.\n\nThe app sees keystrokes. That is why it is built so that what you type lives in memory for a few seconds and is then wiped — it goes into no file, no log and no crash report.\n\nWhat it does not see: when the system turns on secure input — at the login window, in a password manager, in an ordinary app's password field — the keystrokes simply never reach it. Not “we choose not to look”, but physically absent.\n\nAnd, honestly, the limit of that: on websites, no browser turns that mode on. There a password field is recognised from the page's accessibility markup — which works in Safari, and does not work in Chrome or Firefox, so in those only manual correction is available by default.\n\nPress the button, switch “Lazy Switcher” on in the list, and come back here.";
+"onboarding.step2.body" = "macOS will not let a program see what you type without your consent.
+
+What that means: the app sees keystrokes. What you type lives in memory for a few seconds and is wiped — it goes into no file and no log.
+
+What it does not see: when the system turns on secure input — the login window, a password manager, an ordinary app's password field — the keystrokes never reach it at all.
+
+On websites no browser turns that mode on. There a password field is recognised from the page markup: that works in Safari and does not in Chrome or Firefox, so those default to manual correction only.
+
+Press the button, switch «Lazy Switcher» on in the list, and come back.";
 "onboarding.step2.primary" = "Open Accessibility settings";
 "onboarding.step2.secondary" = "Skip";
 "onboarding.step3.title" = "All set";
-"onboarding.step3.body" = "Everything works.\n\nType a word in the wrong layout and press space — it fixes itself, as long as the word is longer than four characters.\n\nYour chosen gesture (double Shift by default):\n• text is selected — the whole selection is converted;\n• a correction just happened — it is undone, and the word is remembered as “never change”;\n• otherwise — the last word is corrected.\n\nLeft and right Shift together pauses the app.\n\nAll of this is adjustable in Settings: the gesture, the sound and the list of apps.";
+"onboarding.step3.body" = "Type a word in the wrong layout and press space — it fixes itself.
+
+Double Shift: with a selection, converts it; right after a correction, undoes it; otherwise fixes the last word.
+
+Left and right Shift together pauses the app.
+
+The gesture, the sound and the app list are all adjustable in Settings.";
 "onboarding.step3.primary" = "Get started";
 "onboarding.step3.secondary" = "Open Settings";
 "menu.status.paused" = "Paused — press left and right Shift together";
 "launchAtLogin.reason.notFound" = "the system cannot find the app";
 "launchAtLogin.reason.unknown" = "unknown state";
 "updates.error.malformed" = "unexpected response from the server";
+
+"settings.tab.about" = "About";
+"settings.row.startup" = "Startup";
+"settings.row.correction" = "Correction";
+"settings.row.signal" = "Feedback";
+"settings.keys.does" = "What it does";
+"settings.keys.pauseLabel" = "Pause";
+"settings.keys.pause" = "Left and right Shift together";
+"settings.keys.what" = "With a selection, converts it. Right after a correction, undoes it. Otherwise, the last word.";
+"settings.apps.risky" = "Browsers";
+"settings.apps.showProtected" = "Show protected apps";
+"about.version" = "Version %@";
+"about.hideBanner" = "Hide";
+"about.showBanner" = "Show banner";
+"about.facts" = "No network except update checks. Nothing you type is written to disk.";"menu.about" = "About LazySwitcher";
+"settings.permissions.label" = "Access";
+"settings.permissions.stuck" = "Accessibility is ticked but the system still refuses. Only a Terminal command clears this.";
+"settings.permissions.copyCommand" = "Copy the command";
+"settings.permissions.copied" = "Copied — paste it into Terminal";
+"about.links" = "Source code, dictionary licences and the reasoning behind each decision are on the project page.";

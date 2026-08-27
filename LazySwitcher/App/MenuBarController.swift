@@ -109,6 +109,11 @@ final class MenuBarController {
         preferences.target = target
         menu.addItem(preferences)
 
+        let about = NSMenuItem(title: L("menu.about"),
+                               action: #selector(AppDelegate.showAbout(_:)), keyEquivalent: "")
+        about.target = target
+        menu.addItem(about)
+
         let access = NSMenuItem(title: L("menu.accessibility"),
                                 action: #selector(AppDelegate.openAccessibilitySettings(_:)), keyEquivalent: "")
         access.target = target

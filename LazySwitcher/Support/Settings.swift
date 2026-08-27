@@ -21,6 +21,8 @@ final class Settings {
         case hotkeyStyle = "hotkeyStyle"
         case checkUpdatesAutomatically = "checkUpdatesAutomatically"
         case lastUpdateCheck = "lastUpdateCheck"
+        case bannerHidden = "bannerHidden"
+        case hasSeenWelcome = "hasSeenWelcome"
     }
 
     private init() {
@@ -71,6 +73,20 @@ final class Settings {
     var checkUpdatesAutomatically: Bool {
         get { defaults.bool(forKey: Key.checkUpdatesAutomatically.rawValue) }
         set { defaults.set(newValue, forKey: Key.checkUpdatesAutomatically.rawValue) }
+    }
+
+    /// Whether the About screen shows the banner. Purely cosmetic, remembered so
+    /// somebody who finds it too large is not shown it again every time.
+    var bannerHidden: Bool {
+        get { defaults.bool(forKey: Key.bannerHidden.rawValue) }
+        set { defaults.set(newValue, forKey: Key.bannerHidden.rawValue) }
+    }
+
+    /// First run has happened. Guards the welcome screen, not the permission
+    /// flow — those are different questions and were once the same flag.
+    var hasSeenWelcome: Bool {
+        get { defaults.bool(forKey: Key.hasSeenWelcome.rawValue) }
+        set { defaults.set(newValue, forKey: Key.hasSeenWelcome.rawValue) }
     }
 
     var lastUpdateCheck: Date? {

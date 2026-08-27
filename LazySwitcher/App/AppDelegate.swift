@@ -178,6 +178,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         startTapOrExplain()
+        showWelcomeIfFirstRun()
         // Deliberately not opened at launch. A menu-bar agent that throws a
         // window in your face is bad manners, and worse, ours kept stealing
         // focus back from the app being tested. The report file is written
@@ -216,6 +217,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menuBar.update(permissions: state.looksStuck ? .stuck : .missing)
         showOnboarding()
         watchForPermission()
+    }
+
+    /// Shown once, on the very first launch, even when permissions are already
+    /// in place — somebody who granted access before the app ever ran has still
+    /// never been told what it does.
+    private func showWelcomeIfFirstRun() {
+        guard !Settings.shared.hasSeenWelcome else { return }
+        showOnboarding()
     }
 
     /// Poll until access appears, then start without asking the user to relaunch.
@@ -489,6 +498,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if settingsWindow == nil { settingsWindow = SettingsWindowController(app: self) }
         NSApp.activate(ignoringOtherApps: true)
         settingsWindow?.showWindow(nil)
+    }
+
+    @objc func showAbout(_ sender: Any?) {
+        if settingsWindow == nil { settingsWindow = SettingsWindowController(app: self) }
+        NSApp.activate(ignoringOtherApps: true)
+        settingsWindow?.showWindow(nil)
+        settingsWindow?.showAboutPane()
     }
 
     /// Renders a run of keystrokes in the active layout and in the other one.

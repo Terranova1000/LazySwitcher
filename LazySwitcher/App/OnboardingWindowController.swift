@@ -17,6 +17,7 @@ final class OnboardingWindowController: NSWindowController {
     private var stepIndex = 0
     private var body: NSTextField!
     private var title: NSTextField!
+    private var banner: NSImageView!
     private var primary: NSButton!
     private var secondary: NSButton!
     private var poll: Timer?
@@ -50,6 +51,20 @@ final class OnboardingWindowController: NSWindowController {
 
     private func build() {
         guard let window else { return }
+        // The banner is the privacy promise, and it belongs here rather than
+        // anywhere else in the app: it is the answer to the question the next
+        // screen is about to ask for — permission to watch every keystroke.
+        banner = NSImageView(image: NSImage(named: "Banner") ?? NSImage())
+        banner.imageScaling = .scaleProportionallyUpOrDown
+        banner.translatesAutoresizingMaskIntoConstraints = false
+        banner.wantsLayer = true
+        banner.layer?.cornerRadius = 10
+        banner.layer?.masksToBounds = true
+        NSLayoutConstraint.activate([
+            banner.widthAnchor.constraint(equalToConstant: 456),
+            banner.heightAnchor.constraint(equalToConstant: 228),
+        ])
+
         title = NSTextField(labelWithString: "")
         title.font = .systemFont(ofSize: 22, weight: .semibold)
 
@@ -65,7 +80,7 @@ final class OnboardingWindowController: NSWindowController {
         buttons.orientation = .horizontal
         buttons.spacing = 10
 
-        let stack = NSStackView(views: [title, body, NSView(), buttons])
+        let stack = NSStackView(views: [banner, title, body, NSView(), buttons])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 16
@@ -91,7 +106,10 @@ final class OnboardingWindowController: NSWindowController {
         primary.title = step.primaryTitle
         secondary.title = step.secondaryTitle ?? ""
         secondary.isHidden = step.secondaryTitle == nil
+        // Banner only on the welcome screen: it is a greeting, not a heading.
+        banner.isHidden = stepIndex != 0
         if stepIndex == 1 { startWatchingForGrant() } else { poll?.invalidate() }
+        window?.setContentSize(NSSize(width: 520, height: stepIndex == 0 ? 560 : 430))
     }
 
     @objc private func advance(_ sender: Any?) {
@@ -103,6 +121,7 @@ final class OnboardingWindowController: NSWindowController {
             Permissions.openAccessibilitySettings()
         default:
             poll?.invalidate()
+            Settings.shared.hasSeenWelcome = true
             close()
         }
     }
