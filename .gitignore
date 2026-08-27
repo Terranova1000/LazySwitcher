@@ -1,0 +1,21 @@
+# Подпись — ключ ко всем выданным разрешениям, в репозиторий не кладём
+*.p12
+*.key
+*.crt
+.lazyswitcher-signing/
+
+# Xcode
+build/
+DerivedData/
+*.xcuserstate
+xcuserdata/
+*.xcworkspace/xcshareddata/IDEWorkspaceChecks.plist
+
+# Сборка и модели
+dist/
+Tools/.venv/
+Tools/build-models/work/
+*.pyc
+__pycache__/
+
+.DS_Store
