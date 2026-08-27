@@ -102,3 +102,4 @@
 "onboarding.step3.body" = "Everything works.\n\nType a word in the wrong layout and press space — it fixes itself, as long as the word is longer than four characters.\n\nYour chosen gesture (double Shift by default):\n• text is selected — the whole selection is converted;\n• a correction just happened — it is undone, and the word is remembered as “never change”;\n• otherwise — the last word is corrected.\n\nLeft and right Shift together pauses the app.\n\nAll of this is adjustable in Settings: the gesture, the sound and the list of apps.";
 "onboarding.step3.primary" = "Get started";
 "onboarding.step3.secondary" = "Open Settings";
+"menu.status.paused" = "Paused — press left and right Shift together";

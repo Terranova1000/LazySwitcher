@@ -12,6 +12,7 @@ final class MenuBarController {
     private weak var target: AppDelegate?
     private var permissions: PermissionState = .missing
     private var secureInputActive = false
+    private var paused = false
 
     init(delegate: AppDelegate) {
         target = delegate
@@ -27,6 +28,11 @@ final class MenuBarController {
 
     func update(secureInput active: Bool) {
         secureInputActive = active
+        redraw()
+    }
+
+    func update(paused active: Bool) {
+        paused = active
         redraw()
     }
 
@@ -54,10 +60,11 @@ final class MenuBarController {
 
     private func redraw() {
         let symbol: String
-        switch (permissions, secureInputActive) {
-        case (.missing, _), (.stuck, _): symbol = "exclamationmark.triangle"
-        case (_, true):                  symbol = "lock.fill"
-        case (_, false):                 symbol = "character.cursor.ibeam"
+        switch (permissions, secureInputActive, paused) {
+        case (.missing, _, _), (.stuck, _, _): symbol = "exclamationmark.triangle"
+        case (_, true, _):                     symbol = "lock.fill"
+        case (_, _, true):                     symbol = "pause.circle"
+        default:                               symbol = "character.cursor.ibeam"
         }
         let image = NSImage(systemSymbolName: symbol, accessibilityDescription: "Lazy Switcher")
         image?.isTemplate = true
@@ -75,6 +82,7 @@ final class MenuBarController {
         // macOS 15 (00-DECISIONS.md, Н13), and a name taken from a guess is
         // worse than no name.
         if secureInputActive { return L("menu.status.pausedSecureInput") }
+        if paused { return L("menu.status.paused") }
         return L("menu.status.active")
     }
 

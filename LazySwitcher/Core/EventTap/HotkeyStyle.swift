@@ -43,17 +43,31 @@ enum HotkeyStyle: String, CaseIterable {
     }
 
     /// Key codes that count for this gesture.
-    var keyCodes: Set<UInt16> {
-        switch self {
-        case .doubleShift:   return [0x38, 0x3C]
-        case .doubleOption:  return [0x3A, 0x3D]
-        case .doubleControl: return [0x3B, 0x3E]
-        case .doubleCommand: return [0x37, 0x36]
-        case .rightCommand:  return [0x36]
-        case .rightOption:   return [0x3D]
-        case .rightControl:  return [0x3E]
-        }
-    }
+    ///
+    /// Stored, not built on demand. The event-tap callback asks for this on
+    /// every modifier press, and returning a fresh `Set` there allocated on the
+    /// hot path — which rule 7 forbids outright, and for good reason: the
+    /// callback runs synchronously in front of every keystroke on the machine.
+    private static let codes: [HotkeyStyle: Set<UInt16>] = [
+        .doubleShift:   [0x38, 0x3C],
+        .doubleOption:  [0x3A, 0x3D],
+        .doubleControl: [0x3B, 0x3E],
+        .doubleCommand: [0x37, 0x36],
+        .rightCommand:  [0x36],
+        .rightOption:   [0x3D],
+        .rightControl:  [0x3E],
+    ]
+
+    var keyCodes: Set<UInt16> { Self.codes[self] ?? [] }
+
+    /// Lowest key code of the pair, for telling left from right without sorting.
+    var primaryKeyCode: UInt16 { Self.primaryCodes[self] ?? 0 }
+
+    private static let primaryCodes: [HotkeyStyle: UInt16] = [
+        .doubleShift: 0x38, .doubleOption: 0x3A, .doubleControl: 0x3B,
+        .doubleCommand: 0x36, .rightCommand: 0x36, .rightOption: 0x3D,
+        .rightControl: 0x3E,
+    ]
 
     /// The flag that is set while this modifier is held.
     var flag: CGEventFlags {
@@ -66,9 +80,17 @@ enum HotkeyStyle: String, CaseIterable {
     }
 
     /// Modifiers that disqualify the gesture — everything except our own.
-    var disqualifyingFlags: [CGEventFlags] {
-        [.maskShift, .maskAlternate, .maskControl, .maskCommand].filter { $0 != flag }
-    }
+    /// Stored for the same reason as `keyCodes`: this is read per keystroke.
+    var disqualifyingFlags: [CGEventFlags] { Self.disqualifying[self] ?? [] }
+
+    private static let disqualifying: [HotkeyStyle: [CGEventFlags]] = {
+        var table: [HotkeyStyle: [CGEventFlags]] = [:]
+        for style in HotkeyStyle.allCases {
+            table[style] = [.maskShift, .maskAlternate, .maskControl, .maskCommand]
+                .filter { $0 != style.flag }
+        }
+        return table
+    }()
 
     /// Device-specific bit for a given key code, so left and right can be told
     /// apart. `CGEventFlags` only exposes the combined modifier, and the panic

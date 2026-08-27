@@ -33,6 +33,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// to delete is stale.
     private var isReplacing = false
 
+    /// Panic pause. Promised in the menu, in Settings and in the onboarding, and
+    /// until now it only played a beep — the gesture people reach for when
+    /// something has gone wrong did nothing at all.
+    private(set) var isPaused = false
+
     /// Recent words, for settling short ones by their neighbours.
     private var chain = WordChain()
 
@@ -113,12 +118,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // App switch → new process to observe, and a caret that is now elsewhere.
         apps.onAppChanged = { [weak self] pid, bundleID, name in
             guard let self else { return }
+            chain.clear()
+            undo.invalidate()
             tap.invalidateBuffer(reason: .appChanged)
             focus.observe(pid: pid, bundleID: bundleID)
             publishContext(bundleID: bundleID, appName: name)
         }
         focus.onFocusChanged = { [weak self] _ in
             guard let self else { return }
+            chain.clear()
+            undo.invalidate()
             tap.invalidateBuffer(reason: .focusChanged)
             publishContext(bundleID: apps.bundleID, appName: apps.appName)
         }
@@ -128,7 +137,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // A click can put the caret anywhere; keeping the buffer across one
         // would make our backspaces delete somebody else's text.
-        mouse.onClick = { [weak self] in self?.tap.invalidateBuffer(reason: .mouseClick) }
+        mouse.onClick = { [weak self] in
+            guard let self else { return }
+            chain.clear()
+            undo.invalidate()
+            tap.invalidateBuffer(reason: .mouseClick)
+        }
         mouse.start()
 
         inputSources.onLayoutChanged = { [weak self] in
@@ -144,9 +158,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         tap.onHotkey = { [weak self] event in self?.handle(hotkey: event) }
         tap.onBufferInvalidated = { [weak self] _ in
-            // The chain is a claim about text sitting on screen in a known
-            // place. Once the caret has moved, it is a claim about nothing.
+            // Both the chain and the undo are claims about text sitting on
+            // screen in a known place. Once the caret has moved — a click, a
+            // focus change, an app switch, an arrow key — they are claims about
+            // nothing, and acting on them deletes whatever is there instead.
             self?.chain.clear()
+            self?.undo.invalidate()
         }
 
         startTapOrExplain()
@@ -198,8 +215,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// cheap, rather than trusting a notification that may never come.
     private func watchForPermission() {
         guard permissionTimer == nil else { return }
+        // Backs off and eventually stops. Polling once a second forever is what
+        // a background agent should never do: if the user is not going to grant
+        // access, we would spend the rest of the login session asking. After a
+        // few minutes the onboarding window is the thing that will notice.
+        var elapsed = 0.0
         let t = Timer(timeInterval: 1.0, repeats: true) { [weak self] timer in
-            guard let self else { return }
+            guard let self else { timer.invalidate(); return }
+            elapsed += 1
+            if elapsed > 300 {
+                timer.invalidate()
+                permissionTimer = nil
+                return
+            }
             guard Permissions.current(runProbe: false).isUsable else { return }
             if tap.start() {
                 menuBar.update(permissions: .granted)
@@ -291,13 +319,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             case .allowed:
                 lastVetoReason = nil
             }
+            // Only a space is safe to act on.
+            //
+            // Return has usually already done something irreversible — sent the
+            // message, submitted the form — so the characters before the caret
+            // are no longer the ones we just watched being typed, and deleting
+            // that many would eat somebody else's text. Tab moved focus, which
+            // is the same problem. Escape may have closed the field entirely.
+            guard terminator == Self.spaceKeyCode else {
+                chain.clear()
+                lastDecisionNote = "«\(reading.typed)»: слово закрыто не пробелом — не трогаем"
+                return
+            }
             considerAutomatic(word: word,
                               typed: reading.typed,
                               alternative: reading.alternative,
                               sourceLanguage: reading.sourceLanguage,
                               targetLanguage: reading.targetLanguage,
                               target: reading.target,
-                              trailing: terminator == Self.spaceKeyCode ? " " : nil)
+                              trailing: " ")
         }
     }
 
@@ -311,6 +351,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                                    targetLanguage: String,
                                    target: TISInputSource,
                                    trailing: String?) {
+        guard !isPaused else { return }
         let hot = context.current
         guard let sourceModel = modelStore.model(for: sourceLanguage),
               let targetModel = modelStore.model(for: targetLanguage) else {
@@ -439,10 +480,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func handle(hotkey event: HotkeyDetector.Event) {
         switch event {
         case .panicToggle:
-            NSSound.beep()                      // M6 wires the real pause
+            isPaused.toggle()
+            // Drop everything held: after a pause the caret is wherever the user
+            // took it, and resuming must not act on a stale picture of the text.
+            chain.clear()
+            undo.invalidate()
+            tap.invalidateBuffer(reason: .appChanged)
+            menuBar.update(paused: isPaused)
+            note(isPaused ? "пауза" : "работаем")
+            NSSound.beep()
         case .doubleTapShift:
             // Undo first: pressing the hotkey right after a replacement means
             // "that was wrong", not "do it again".
+            guard !isPaused else { return }
             if undo.isAvailable, let pending = undo.consume() {
                 revert(pending)
                 return

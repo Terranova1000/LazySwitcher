@@ -119,6 +119,37 @@ final class KeyMapperTests: XCTestCase {
                      "Частичная строка опаснее пустой: сотрём не столько символов")
     }
 
+    /// Prints exactly which Latin characters the Cyrillic letters land on.
+    ///
+    /// The model's English alphabet has to contain every one of them, because a
+    /// Russian word typed on a Latin layout is made of them. Guessing the list
+    /// cost a measurable regression once already — «ё» sits on the backslash key
+    /// on the macOS "Russian" layout, not on the grave key — so it is derived
+    /// from the system's own layout data rather than written from memory.
+    func testPrintLatinCharactersUsedByCyrillicLetters() throws {
+        let en = try layout(matchingLanguage: "en")
+        let ru = try layout(matchingLanguage: "ru")
+        var produced = Set<Character>()
+        var cyrillic = Set<Character>()
+        for keyCode in 0..<UInt16(128) {
+            for shift in [false, true] {
+                guard let cyr = ru.character(keyCode: keyCode, shift: shift),
+                      let lat = en.character(keyCode: keyCode, shift: shift),
+                      let c = cyr.first, let l = lat.first,
+                      cyr.count == 1, lat.count == 1 else { continue }
+                guard c.isLetter, ("а"..."я").contains(String(c).lowercased()) || c == "ё" || c == "Ё"
+                else { continue }
+                cyrillic.insert(c)
+                produced.insert(l)
+            }
+        }
+        let punctuation = produced.filter { !$0.isLetter }.sorted()
+        print("\nКириллических букв на клавишах: \(cyrillic.count)")
+        print("Латинские символы, на которых они сидят (без букв): \(punctuation.map(String.init).joined(separator: " "))")
+        print("Строка для алфавита модели: \(punctuation.map(String.init).joined())")
+        XCTAssertFalse(punctuation.isEmpty, "Кириллица обязана занимать клавиши со знаками")
+    }
+
     func testTableIsCachedRatherThanRebuilt() throws {
         let source = try XCTUnwrap(InputSourceService.currentLayout())
         let first = mapper.table(for: source)

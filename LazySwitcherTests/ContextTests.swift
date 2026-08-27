@@ -364,3 +364,134 @@ final class LocalizationTests: XCTestCase {
         }
     }
 }
+
+/// Regressions from the audit. Each of these was a real defect found by reading
+/// the code, and each test is here so it cannot come back quietly.
+final class AuditRegressionTests: XCTestCase {
+
+    private func models() throws -> Scorer.Models {
+        let bundle = Bundle(for: AppDelegate.self)
+        func model(_ name: String) throws -> LanguageModel {
+            guard let url = bundle.url(forResource: name, withExtension: "lsmodel") else {
+                throw XCTSkip("Нет модели \(name).lsmodel")
+            }
+            return try LanguageModel(contentsOf: url)
+        }
+        return .init(source: try model("en"), target: try model("ru"))
+    }
+
+    /// The models hold lower case only. Before the fix, a capitalised word made
+    /// `logProbability` return nil, which became −∞; one side unrepresentable
+    /// gave Λ = +∞ — infinite confidence to replace — and both sides gave NaN,
+    /// which fails every comparison so nothing was ever replaced. Every word
+    /// starting a sentence took one of those two paths.
+    func testCapitalisedWordsAreScoredNotBrokenByCase() throws {
+        let scorer = Scorer(models: try models())
+        let (decision, evidence) = scorer.decide(typed: "Ghbdtn", converted: "Привет")
+        XCTAssertTrue(evidence.perCharacter.isFinite, "Λ обязано быть конечным, получили \(evidence.perCharacter)")
+        XCTAssertFalse(evidence.perCharacter.isNaN)
+        XCTAssertTrue(evidence.isScorable)
+        XCTAssertEqual(decision, .convert, "Слово с заглавной должно вести себя как строчное")
+    }
+
+    func testLowerAndUpperCaseGiveTheSameVerdict() throws {
+        let scorer = Scorer(models: try models())
+        let lower = scorer.decide(typed: "ghbdtn", converted: "привет")
+        let upper = scorer.decide(typed: "GHBDTN", converted: "ПРИВЕТ")
+        XCTAssertEqual(lower.0, upper.0)
+        XCTAssertEqual(lower.1.perCharacter, upper.1.perCharacter, accuracy: 0.0001)
+    }
+
+    /// A character outside the alphabet used to produce ±∞ and drive a
+    /// replacement with unbounded confidence. Now it produces "no opinion".
+    func testUnrepresentableCharactersProduceNoOpinionRatherThanInfinity() throws {
+        let scorer = Scorer(models: try models())
+        for (typed, converted) in [("ghbdtn7", "привет7"), ("hello—", "руддщ—"), ("ünïcode", "цтълщву")] {
+            let (decision, evidence) = scorer.decide(typed: typed, converted: converted)
+            XCTAssertTrue(evidence.perCharacter.isFinite, "\(typed): Λ = \(evidence.perCharacter)")
+            XCTAssertNotEqual(decision, .convert,
+                              "\(typed): непредставимое слово не должно заменяться с уверенностью")
+        }
+    }
+
+    /// Every gesture is asked for its key codes on every modifier press, inside
+    /// the event-tap callback. Building a Set there allocated on the hot path,
+    /// which rule 7 forbids. They are stored now; this checks they are also
+    /// still correct and stable between calls.
+    func testHotkeyKeyCodesAreStableAndDistinct() {
+        for style in HotkeyStyle.allCases {
+            let first = style.keyCodes
+            let second = style.keyCodes
+            XCTAssertEqual(first, second)
+            XCTAssertFalse(first.isEmpty, "\(style)")
+            XCTAssertTrue(first.contains(style.primaryKeyCode),
+                          "\(style): primaryKeyCode должен входить в набор")
+        }
+    }
+
+    func testDisqualifyingFlagsNeverIncludeOwnModifier() {
+        for style in HotkeyStyle.allCases {
+            XCTAssertFalse(style.disqualifyingFlags.contains(style.flag), "\(style)")
+            XCTAssertEqual(style.disqualifyingFlags.count, 3, "\(style)")
+        }
+    }
+}
+
+/// The alphabet contract between the model builder and the scorer.
+///
+/// It is the kind of coupling that breaks silently: get it wrong and words
+/// become unrepresentable, the model answers "no opinion", and a third of
+/// Russian words quietly stop being corrected. It cost a measured regression
+/// once — misses at eight characters and up went from 0% to 28% — so it is
+/// pinned here.
+final class AlphabetContractTests: XCTestCase {
+
+    private func model(_ name: String) throws -> LanguageModel {
+        let bundle = Bundle(for: AppDelegate.self)
+        guard let url = bundle.url(forResource: name, withExtension: "lsmodel") else {
+            throw XCTSkip("Нет модели \(name).lsmodel")
+        }
+        return try LanguageModel(contentsOf: url)
+    }
+
+    /// Cyrillic letters live on these keys, so a Russian word typed on a Latin
+    /// layout is made of letters *and these*. The English model must be able to
+    /// represent every one of them.
+    func testEnglishModelRepresentsPunctuationCyrillicLettersSitOn() throws {
+        let en = try model("en")
+        for character in "[];',.\\" {
+            XCTAssertTrue(en.canRepresent(String(character)),
+                          "Английская модель не знает «\(character)» — на этой клавише сидит русская буква")
+        }
+    }
+
+    /// Real Russian words containing х ъ ж э б ю ё, typed on a Latin layout.
+    func testRussianWordsWithPunctuationLettersAreScorable() throws {
+        let en = try model("en")
+        let ru = try model("ru")
+        let scorer = Scorer(models: .init(source: en, target: ru))
+        // безуёмным, объяснение, выживаем, этот, любой
+        for (latin, russian) in [(",tpe\\vysv", "безуёмным"), ("j,]zcytybt", "объяснение"),
+                                 ("ds;bdftv", "выживаем"), ("'njn", "этот"), ("k.,jq", "любой")] {
+            let (_, evidence) = scorer.decide(typed: latin, converted: russian)
+            XCTAssertTrue(evidence.isScorable,
+                          "«\(latin)» → «\(russian)»: модель не может оценить, хотя это обычное русское слово")
+        }
+    }
+
+    /// Shifted punctuation is the same key as its unshifted twin, and on ЙЦУКЕН
+    /// that key is one Cyrillic letter in two cases. Scoring is case-insensitive,
+    /// so these must fold together.
+    func testShiftedPunctuationFoldsOntoItsUnshiftedTwin() {
+        XCTAssertEqual(LanguageModel.normalized("J,]ZCYTYBT"), LanguageModel.normalized("j,]zcytybt"))
+        XCTAssertEqual(LanguageModel.normalized("DS:BDFTV"), "ds;bdftv")
+        XCTAssertEqual(LanguageModel.normalized("\"NJN"), "'njn")
+    }
+
+    func testNormalizationIsIdempotent() {
+        for word in ["ghbdtn", "J,]Z", "Привет", "ds;bdftv", ""] {
+            let once = LanguageModel.normalized(word)
+            XCTAssertEqual(LanguageModel.normalized(once), once, "«\(word)»")
+        }
+    }
+}

@@ -224,6 +224,31 @@ final class EvaluationTests: XCTestCase {
         try? text.write(to: url, atomically: true, encoding: .utf8)
     }
 
+    /// Prints examples of what is still missed, so a weakness can be seen rather
+    /// than inferred from a percentage.
+    func testShowWhatIsStillMissed() throws {
+        let words = try corpus("ru", limit: 4000).filter { $0.count >= 8 }
+        let scorer = Scorer(models: .init(source: englishModel, target: russianModel))
+        var unscorable: [(String, String)] = []
+        var belowThreshold: [(String, String, Double)] = []
+
+        for word in words {
+            guard let keys = mapper.keystrokes(of: word, in: russianTable),
+                  let latin = mapper.render(keys, with: englishTable) else { continue }
+            let (decision, evidence) = scorer.decide(typed: latin, converted: word)
+            guard decision != .convert else { continue }
+            if !evidence.isScorable { unscorable.append((latin, word)) }
+            else { belowThreshold.append((latin, word, evidence.perCharacter)) }
+        }
+
+        print("\nне поддаются оценке: \(unscorable.count)")
+        for (latin, word) in unscorable.prefix(10) { print("   «\(latin)» → «\(word)»") }
+        print("\nниже порога: \(belowThreshold.count)")
+        for (latin, word, lambda) in belowThreshold.sorted(by: { $0.2 < $1.2 }).prefix(10) {
+            print(String(format: "   Λ=%+.2f  «%@» → «%@»", lambda, latin, word))
+        }
+    }
+
     func testMeasureAndWriteReport() throws {
         let limit = 6000
         let russian = try corpus("ru", limit: limit)

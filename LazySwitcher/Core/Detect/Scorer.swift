@@ -31,6 +31,9 @@ struct Scorer {
         var length = 0
         /// True when the dictionaries alone settle it.
         var decidedByDictionary = false
+        /// False when a reading contains a character the model has no symbol for.
+        /// Then `logLikelihoodRatio` carries no information and must not be used.
+        var isScorable = true
     }
 
     enum Decision: Equatable {
@@ -64,14 +67,35 @@ struct Scorer {
         var evidence = Evidence()
         evidence.length = typed.count
 
-        evidence.typedIsKnownWord = models.source.contains(typed)
-        evidence.convertedIsKnownWord = models.target.contains(converted)
+        // Models are trained on lower case with shifted layout punctuation
+        // folded, so scoring must match. Missing this
+        // was not a small inaccuracy: an unrepresentable word makes
+        // `logProbability` return nil, and the earlier `?? -.infinity` turned
+        // that into Λ = +∞ when only one side was unrepresentable — infinite
+        // confidence to replace — and into NaN when both were, which fails every
+        // comparison and so never replaces. Every capitalised word took one of
+        // those two paths.
+        let typedKey = LanguageModel.normalized(typed)
+        let convertedKey = LanguageModel.normalized(converted)
 
-        let typedScore = models.source.logProbability(of: typed) ?? -Double.infinity
-        let convertedScore = models.target.logProbability(of: converted) ?? -Double.infinity
+        evidence.typedIsKnownWord = models.source.contains(typedKey)
+        evidence.convertedIsKnownWord = models.target.contains(convertedKey)
+
+        guard let typedScore = models.source.logProbability(of: typedKey),
+              let convertedScore = models.target.logProbability(of: convertedKey) else {
+            // At least one reading contains something the model has no symbol
+            // for — a digit, a dash, a letter of a third alphabet. We have no
+            // opinion, and saying so is the only honest answer.
+            evidence.isScorable = false
+            evidence.logLikelihoodRatio = 0
+            evidence.perCharacter = 0
+            evidence.decidedByDictionary = evidence.typedIsKnownWord != evidence.convertedIsKnownWord
+            return evidence
+        }
+
+        evidence.isScorable = true
         evidence.logLikelihoodRatio = convertedScore - typedScore
         evidence.perCharacter = evidence.logLikelihoodRatio / Double(evidence.length + 1)
-
         evidence.decidedByDictionary = evidence.typedIsKnownWord != evidence.convertedIsKnownWord
         return evidence
     }
@@ -91,6 +115,9 @@ struct Scorer {
             // is "не" and also a plausible fragment, and both readings exist.
             return evidence.length >= Self.minimumSelfDecidingLength ? .convert : .undecided
         }
+
+        // Nothing the model can say about this one.
+        guard evidence.isScorable else { return .undecided }
 
         // Both known, or neither. Now the model gets to speak, against a
         // threshold that rises as the word gets shorter.

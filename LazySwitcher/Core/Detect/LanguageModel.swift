@@ -80,6 +80,28 @@ final class LanguageModel {
 
     // MARK: - Alphabet
 
+    /// Shifted layout punctuation folded onto its unshifted twin.
+    ///
+    /// These pairs are not arbitrary: on a US keyboard `;` and `:` are one key,
+    /// and on ЙЦУКЕН that key is ж and Ж. Since scoring is case-insensitive
+    /// anyway, treating `:` and `;` as one symbol is the same statement as
+    /// treating Ж and ж as one letter — and it keeps the alphabet at 34 symbols
+    /// instead of 40, which is the difference between a 1.3 MB table and a
+    /// 2.6 MB one for no added information.
+    private static let shiftFolding: [Character: Character] = [
+        ":": ";", "<": ",", ">": ".", "{": "[", "}": "]", "|": "\\", "\"": "'",
+    ]
+
+    /// Brings a word into the form the model was trained on.
+    ///
+    /// Callers must use this rather than `lowercased()` alone. Getting it wrong
+    /// is silent: the word becomes unrepresentable, the model says "no opinion",
+    /// and a third of Russian words stop being corrected with nothing in the
+    /// logs to say why.
+    static func normalized(_ word: String) -> String {
+        String(word.lowercased().map { shiftFolding[$0] ?? $0 })
+    }
+
     /// Indices for a word, or nil if any character is outside this alphabet.
     ///
     /// Nil rather than "skip the unknown character": a word with a stray symbol
@@ -100,6 +122,9 @@ final class LanguageModel {
     // MARK: - Dictionary
 
     /// Is this an exact word of the language?
+    ///
+    /// - Note: the dictionary holds lower-case forms only, so callers must
+    ///   lower-case first. `Scorer` does; nothing else should be calling this.
     func contains(_ word: String) -> Bool {
         guard let indices = indices(of: word), !indices.isEmpty else { return false }
         return walk(indices)?.isFinal ?? false

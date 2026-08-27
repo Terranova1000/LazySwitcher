@@ -143,7 +143,7 @@ final class HotkeyDetector {
             return .doubleTapShift
         }
 
-        let isLeft = keyCode == Array(config.style.keyCodes).min()
+        let isLeft = keyCode == config.style.primaryKeyCode
 
         if isDown {
             shiftPressedAt = timestamp
