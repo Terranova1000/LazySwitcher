@@ -473,7 +473,7 @@ TISSelectInputSource(target)
 func char(forKeyCode kc: UInt16, shift: Bool, layout: Data) -> String? {
     var deadKeyState: UInt32 = 0
     var chars = [UniChar](repeating: 0, count: 4)
-    var length: UniCharCount = 0            // именно UniCharCount, не Int — иначе не соберётся
+    var length = 0                          // Int, не UniCharCount — см. 00-DECISIONS.md, Н4а
     let modifierKeyState = ((shift ? UInt32(shiftKey) : 0) >> 8) & 0xFF   // сдвиг на 8 обязателен
 
     return layout.withUnsafeBytes { raw in
@@ -481,7 +481,7 @@ func char(forKeyCode kc: UInt16, shift: Bool, layout: Data) -> String? {
         // options = 0: мёртвые клавиши ОБРАБАТЫВАЮТСЯ (см. предупреждение ниже)
         var st = UCKeyTranslate(kbd, kc, UInt16(kUCKeyActionDown), modifierKeyState,
                                 UInt32(LMGetKbdType()), OptionBits(0),
-                                &deadKeyState, UniCharCount(chars.count), &length, &chars)
+                                &deadKeyState, chars.count, &length, &chars)
         // мёртвая клавиша: первый вызов её проглатывает и не даёт символов, нужен второй
         if st == noErr, length == 0, deadKeyState != 0 {
             st = UCKeyTranslate(kbd, kc, UInt16(kUCKeyActionDown), modifierKeyState,

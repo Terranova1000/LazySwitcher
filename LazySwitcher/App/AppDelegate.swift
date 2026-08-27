@@ -4,12 +4,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     let tap = KeyTapService()
     let secureInput = SecureInputMonitor()
+    let mouse = MouseMonitor()
+    let inputSources = InputSourceService()
+    let keyMapper = KeyMapper()
+
+    /// Words seen since launch, and how many we could render in both layouts.
+    /// Counts only — the words themselves never leave memory.
+    let wordsCommitted = AtomicCounter()
+    let wordsConvertible = AtomicCounter()
+    /// Last word in both readings, for the diagnostics window on screen only.
+    private(set) var lastPair: (typed: String, alternative: String)?
     private var menuBar: MenuBarController!
     private var diagnostics: DiagnosticsWindowController?
     private var reportTimer: Timer?
     private var permissionTimer: Timer?
 
+    /// XCTest launches the app as a host for the test bundle. In that mode it
+    /// must stay inert: a real launch installs an event tap, pops the system
+    /// permission dialog and waits on it, which turns a two-second test run into
+    /// a two-minute one and makes the result depend on what a human clicks.
+    private var isRunningUnderTests: Bool {
+        ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
+            || ProcessInfo.processInfo.environment["XCTestBundlePath"] != nil
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
+        guard !isRunningUnderTests else { return }
         menuBar = MenuBarController(delegate: self)
 
         secureInput.onChange = { [weak self] enabled in
@@ -22,6 +42,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         secureInput.start()
         tap.secureInputMirror.value = secureInput.isEnabled ? 1 : 0
+
+        // A click can put the caret anywhere; keeping the buffer across one
+        // would make our backspaces delete somebody else's text.
+        mouse.onClick = { [weak self] in self?.tap.invalidateBuffer(reason: .mouseClick) }
+        mouse.start()
+
+        inputSources.onLayoutChanged = { [weak self] in self?.keyMapper.invalidate() }
+        inputSources.startWatching()
+
+        tap.onWordCommitted = { [weak self] word in self?.evaluate(word) }
+        tap.onHotkey = { [weak self] event in self?.handle(hotkey: event) }
 
         startTapOrExplain()
         showDiagnostics(nil)   // M0: the diagnostics window is the whole product
@@ -67,6 +98,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         RunLoop.main.add(t, forMode: .common)
         permissionTimer = t
+    }
+
+    /// M1+M2 end to end: a word ended, render it in the active layout and in the
+    /// other one. Deciding which is right is M5; this only proves the chain runs.
+    private func evaluate(_ word: [KeyRecord]) {
+        wordsCommitted.bump()
+        guard let current = InputSourceService.currentLayout(),
+              let currentTable = keyMapper.table(for: current) else { return }
+
+        let others = InputSourceService.enabledKeyboardLayouts().filter {
+            InputSourceService.identifier(of: $0) != currentTable.layoutID
+        }
+        guard let other = others.first,
+              let otherTable = keyMapper.table(for: other),
+              let typed = keyMapper.render(word, with: currentTable),
+              let alternative = keyMapper.render(word, with: otherTable)
+        else { return }
+
+        wordsConvertible.bump()
+        DispatchQueue.main.async { [weak self] in
+            self?.lastPair = (typed: typed, alternative: alternative)
+        }
+    }
+
+    private func handle(hotkey event: HotkeyDetector.Event) {
+        switch event {
+        case .doubleTapShift: NSSound.beep()          // M6 wires the real action
+        case .panicToggle:    NSSound.beep()
+        }
     }
 
     @objc func showDiagnostics(_ sender: Any?) {

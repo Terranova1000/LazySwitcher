@@ -166,6 +166,19 @@ final class DiagnosticsWindowController: NSWindowController {
         row("оживлений сторожем", "\(tap.watchdogRevivalCount.value)")
         row("эксперимент с задержкой", stallResult)
 
+        section("РАСКЛАДКИ И СЛОВА")
+        let delegate = NSApp.delegate as? AppDelegate
+        row("включённых раскладок", "\(InputSourceService.enabledKeyboardLayouts().count)")
+        if let current = InputSourceService.currentLayout() {
+            row("текущая", InputSourceService.localizedName(of: current) ?? "—")
+        }
+        row("слов набрано", "\(delegate?.wordsCommitted.value ?? 0)")
+        row("из них читаемы в обеих", "\(delegate?.wordsConvertible.value ?? 0)")
+        if let pair = delegate?.lastPair {
+            // On screen only, in memory only. Never written anywhere.
+            row("последнее слово", "«\(pair.typed)»  ↔  «\(pair.alternative)»")
+        }
+
         section("SECURE INPUT — ГЛАВНАЯ ПРОВЕРКА")
         row("IsSecureEventInputEnabled", flag(secure))
         if secure, let who = SecureInputMonitor.likelyResponsibleProcess() {

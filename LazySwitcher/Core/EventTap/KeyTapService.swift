@@ -45,6 +45,22 @@ final class KeyTapService {
     /// The callback must not call into Carbon itself, so it reads this instead.
     let secureInputMirror = AtomicCounter()
 
+    // MARK: - Collaborators owned by the tap thread
+
+    /// Both are touched only from the tap thread, so neither needs a lock.
+    private let wordBuffer = WordBuffer()
+    private let hotkeyDetector = HotkeyDetector()
+
+    /// A word just ended. Delivered on `decideQueue`, never on the tap thread.
+    var onWordCommitted: (([KeyRecord]) -> Void)?
+    /// A hotkey fired. Delivered on the main queue.
+    var onHotkey: ((HotkeyDetector.Event) -> Void)?
+
+    private let decideQueue = DispatchQueue(label: "com.lazyswitcher.decide", qos: .userInitiated)
+
+    /// Mach absolute time of the last keystroke, for the idle timeout.
+    private let lastKeystrokeTime = AtomicCounter()
+
     private(set) var isRunning = false
 
     // MARK: - Private
@@ -188,26 +204,64 @@ final class KeyTapService {
         if stall > 0 { usleep(useconds_t(stall * 1000)) }
 
         let secure = secureInputMirror.value != 0
+        let now = mach_absolute_time()
 
         switch type {
         case .keyDown:
             keyDownCount.bump()
             if secure {
-                // Should be unreachable. Counted rather than asserted, because
-                // the whole safety story rests on it and we want evidence.
+                // Should be unreachable: under Secure Input the OS stops
+                // delivering these to every tap in the system. Counted rather
+                // than asserted, because the whole safety story rests on it and
+                // evidence beats belief.
                 keyDownDuringSecureInput.bump()
-            } else {
-                // Autorepeat would otherwise flood the buffer.
-                if event.getIntegerValueField(.keyboardEventAutorepeat) == 0 {
-                    lastKeyCode.value = UInt64(event.getIntegerValueField(.keyboardEventKeycode))
-                    lastFlags.value = UInt64(event.flags.rawValue)
+                wordBuffer.wipe(reason: .secureInput)
+                hotkeyDetector.reset()
+                break
+            }
+
+            // Held-down keys would otherwise flood the buffer.
+            guard event.getIntegerValueField(.keyboardEventAutorepeat) == 0 else { break }
+
+            expireBufferIfIdle(now: now)
+            lastKeystrokeTime.value = now
+
+            lastKeyCode.value = UInt64(event.getIntegerValueField(.keyboardEventKeycode))
+            lastFlags.value = UInt64(event.flags.rawValue)
+
+            hotkeyDetector.noteKeyDown()
+
+            let flags = event.flags
+            let chord = flags.contains(.maskCommand)
+                     || flags.contains(.maskControl)
+                     || flags.contains(.maskAlternate)
+            let record = KeyRecord(event: event, timestamp: now)
+
+            if case .boundary(let word) = wordBuffer.append(record, hasCommandControlOrOption: chord) {
+                // Hand off and get out. Scoring, dictionaries and anything that
+                // could block belong on the other queue.
+                if let handler = onWordCommitted {
+                    decideQueue.async { handler(word) }
                 }
             }
+
         case .flagsChanged:
             flagsChangedCount.bump()
-            // These keep arriving while Secure Input is on. Any hotkey built on
-            // them must check Secure Input first, or it fires mid-password.
-            if secure { flagsChangedDuringSecureInput.bump() }
+            // These keep arriving while Secure Input is on — that asymmetry is
+            // why every modifier-based hotkey is gated on it.
+            if secure {
+                flagsChangedDuringSecureInput.bump()
+                wordBuffer.wipe(reason: .secureInput)
+            }
+            let seconds = Double(now) * Self.machToSeconds
+            if let fired = hotkeyDetector.handleFlagsChanged(flags: event.flags,
+                                                            keyCode: UInt16(event.getIntegerValueField(.keyboardEventKeycode)),
+                                                            timestamp: seconds,
+                                                            secureInputActive: secure),
+               let handler = onHotkey {
+                DispatchQueue.main.async { handler(fired) }
+            }
+
         default:
             break
         }
@@ -215,10 +269,40 @@ final class KeyTapService {
         return Unmanaged.passUnretained(event)
     }
 
+    /// Ten seconds without typing and we no longer believe the caret is where we
+    /// left it — the user has been reading, clicking elsewhere, switching apps.
+    private func expireBufferIfIdle(now: UInt64) {
+        let previous = lastKeystrokeTime.value
+        guard previous != 0 else { return }
+        let elapsed = Double(now - previous) * Self.machToSeconds
+        if elapsed > 10 { wordBuffer.wipe(reason: .idleTimeout) }
+    }
+
+    /// Mach ticks to seconds. Computed once: on Apple Silicon the ratio is not 1.
+    private static let machToSeconds: Double = {
+        var info = mach_timebase_info_data_t()
+        mach_timebase_info(&info)
+        return Double(info.numer) / Double(info.denom) / 1_000_000_000
+    }()
+
+    // MARK: - Invalidating the buffer from outside
+
+    /// Called by the mouse monitor, focus monitor and Secure Input monitor.
+    /// Hops to the tap thread, because the buffer belongs to it.
+    func invalidateBuffer(reason: WordBuffer.ResetReason) {
+        guard let runLoop else { return }
+        CFRunLoopPerformBlock(runLoop, CFRunLoopMode.commonModes.rawValue) { [weak self] in
+            self?.wordBuffer.wipe(reason: reason)
+            self?.hotkeyDetector.reset()
+        }
+        CFRunLoopWakeUp(runLoop)
+    }
+
     /// Called when Secure Input turns on: nothing typed may outlive it.
     func wipeVolatileState() {
         lastKeyCode.value = UInt64.max
         lastFlags.value = 0
+        invalidateBuffer(reason: .secureInput)
     }
 
     // MARK: - Waking up

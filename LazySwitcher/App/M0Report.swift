@@ -57,6 +57,17 @@ enum M0Report {
         row("оживлений сторожем", "\(tap.watchdogRevivalCount.value)")
 
         lines.append("")
+        lines.append("## раскладки и слова")
+        row("включённых раскладок", "\(InputSourceService.enabledKeyboardLayouts().count)")
+        if let current = InputSourceService.currentLayout() {
+            row("текущая", InputSourceService.localizedName(of: current) ?? "—")
+        }
+        if let delegate = NSApp.delegate as? AppDelegate {
+            row("слов набрано", "\(delegate.wordsCommitted.value)")
+            row("из них читаемы в обеих", "\(delegate.wordsConvertible.value)")
+        }
+
+        lines.append("")
         lines.append("## secure input")
         row("включён сейчас", flag(secureInput.isEnabled))
         row("keyDown при Secure Input", "\(tap.keyDownDuringSecureInput.value)  (обязан быть 0)")

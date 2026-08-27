@@ -232,24 +232,53 @@ designated => identifier "com.lazyswitcher.app" and certificate leaf = H"9566d54
 
 ### Н4. `ENABLE_DEBUG_DYLIB = NO` обязателен
 
-Не было в документации, стоило полутора часов. Xcode 16+ по умолчанию собирает
-Debug-конфигурацию как тонкий исполняемый шим плюс отдельный
-`<Имя>.debug.dylib` — это ускоряет пересборку и нужно для SwiftUI Previews.
-Наш самоподписанный сертификат не несёт Team ID, и dyld отказывается грузить
-такой dylib:
+Не было в документации. Xcode 16+ по умолчанию собирает Debug-конфигурацию как
+тонкий исполняемый шим плюс отдельный `<Имя>.debug.dylib` — это ускоряет
+пересборку и нужно для SwiftUI Previews. Загрузить его не удаётся:
 
 ```
 Library not loaded: @rpath/Lazy Switcher.debug.dylib
 Reason: … mapping process and mapped file (non-platform) have different Team IDs
 ```
 
+**Настоящая причина — не Team ID сам по себе, а library validation.** Её включает
+`ENABLE_HARDENED_RUNTIME`, и она требует, чтобы всё загружаемое в процесс было
+подписано тем же Team ID (либо самой Apple). У самоподписанного сертификата
+Team ID нет вовсе, поэтому не проходит ничего: ни `.debug.dylib`, ни, как
+выяснилось позже, XCTest-бандл, который грузится внутрь приложения-хоста.
+
 Приложение при этом **собирается без единого предупреждения**, а `codesign
 --verify --deep --strict` отвечает «valid on disk» и «satisfies its Designated
 Requirement». Ломается оно только при запуске. Живой пример к правилу §7.4
 в `CLAUDE.md`: успешная сборка не значит ничего.
 
-Побочная выгода от выключения: Debug становится структурно таким же, как Release,
-и эксперимент с сохранением разрешений проверяет то же, что уйдёт пользователю.
+Решение из двух частей:
+
+1. `ENABLE_DEBUG_DYLIB = NO` — Previews нам не нужны (AppKit), а Debug заодно
+   становится структурно таким же, как Release, и эксперимент с сохранением
+   разрешений проверяет ровно то, что уйдёт пользователю.
+2. `LazySwitcher/Debug.entitlements` с `com.apple.security.cs.disable-library-validation`,
+   подключённый **только к Debug-конфигурации**. Без него не запускаются тесты.
+   В Release entitlements нет вообще, Hardened Runtime остаётся строгим.
+
+### Н4а. Сигнатура `UCKeyTranslate` в Swift описана в документации неверно
+
+В `04-PLATFORM.md` §5.2 стояло: «именно `UniCharCount`, не `Int` — иначе не
+соберётся». В SDK macOS 26.2 всё наоборот. Swift импортирует C-шный
+`unsigned long` как `Int`, а тип `UniCharCount` в Swift не виден вообще:
+
+```
+(UnsafePointer<UCKeyboardLayout>?, UInt16, UInt16, UInt32, UInt32, OptionBits,
+ UnsafeMutablePointer<UInt32>?, Int, UnsafeMutablePointer<Int>?,
+ UnsafeMutablePointer<UniChar>?) -> OSStatus
+```
+
+Правка внесена, комментарий в `KeyMapper.swift` объясняет причину, чтобы никто
+не «починил» обратно.
+
+А вот соседнее предупреждение про `kUCKeyTranslateNoDeadKeysBit` оказалось
+**совершенно верным** — проверено в `UnicodeUtilities.r`:
+`Bit = 0`, `Mask = 0x00000001`.
 
 ### Н5. Разрешения переживают пересборку — O1 закрыт
 
