@@ -45,6 +45,8 @@ enum VetoGate {
 
         init(word: String, context: HotContext, minimumLength: Int = 5,
              userExclusions: Set<String> = [], isExplicitRequest: Bool = false) {
+            // Порядок параметров держим стабильным: вызовов много, и путаница
+            // между minimumLength и userExclusions компилируется молча.
             self.word = word
             self.context = context
             self.minimumLength = minimumLength

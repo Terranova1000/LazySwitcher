@@ -10,11 +10,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let keyMapper = KeyMapper()
     let apps = AppMonitor()
     let focus = FocusMonitor()
-    let policies = AppPolicyStore()
+    let policies = AppPolicyStore(loadingFrom: .shared)
     let context = ContextStore()
     let replacer = TextReplacer()
     let undo = UndoController()
     let modelStore = ModelStore()
+    let feedback = FeedbackStore()
 
     /// Replacements run here, one at a time.
     ///
@@ -39,7 +40,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Shortest word we will convert on our own. Measured, not guessed: at five
     /// characters false positives are 0.00%, at four they are 0.87%
     /// (eval/report.md). Below five the user has to ask.
-    var minimumAutomaticLength = 5
+    var minimumAutomaticLength: Int { Settings.shared.minimumLength }
 
     /// Words seen since launch, and how many we could render in both layouts.
     /// Counts only — the words themselves never leave memory.
@@ -65,6 +66,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var lastCommitted: Committed?
     private var menuBar: MenuBarController!
     private var diagnostics: DiagnosticsWindowController?
+    private var settingsWindow: SettingsWindowController?
     private var reportTimer: Timer?
     private var permissionTimer: Timer?
 
@@ -181,7 +183,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         hot.isSecureInput = secureInput.isEnabled
         hot.policy = policies.policy(for: bundleID)
         hot.fieldRole = focus.fieldRole
+        // The user may choose to work where the field type is unknown. It is off
+        // by default and the settings screen says plainly what it costs; this is
+        // the one place that turns that choice into behaviour.
+        if Settings.shared.actInUnidentifiedFields, focus.fieldRole == .unknown {
+            hot.fieldRole = .text
+        }
         hot.fieldRoleUnavailable = policies.hidesFieldRoles(bundleID)
+        if !Settings.shared.automaticEnabled, hot.policy == .automatic {
+            hot.policy = .hotkeyOnly
+        }
         context.publish(hot: hot, cold: ColdContext(bundleID: bundleID, appName: appName))
     }
 
@@ -314,14 +325,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self.note("\(outcome.strategy.rawValue): «\(from)» → «\(to)»")
                 self.chain.markConverted(count: count)
                 self.undo.arm(original: from, replacement: to, bundleID: bundleID)
-                self.inputSources.select(target)
+                if Settings.shared.switchLayoutAfterReplacement { self.inputSources.select(target) }
                 self.playFeedback()
             }
         }
     }
 
     private func playFeedback() {
-        NSSound(named: "Tink")?.play()
+        Settings.shared.playFeedbackSound()
+        menuBar.flash()
+    }
+
+    /// Re-reads anything cached from settings. Cheap, so called on every change
+    /// rather than trying to work out which change mattered.
+    func settingsDidChange() {
+        publishContext(bundleID: apps.bundleID, appName: apps.appName)
+    }
+
+    @objc func showSettings(_ sender: Any?) {
+        if settingsWindow == nil { settingsWindow = SettingsWindowController(app: self) }
+        NSApp.activate(ignoringOtherApps: true)
+        settingsWindow?.showWindow(nil)
     }
 
     /// Renders a run of keystrokes in the active layout and in the other one.
@@ -455,8 +479,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self.note("выделение (\(selection.text.count) симв.) → «\(converted.prefix(24))…»")
                 self.tap.clearBufferAfterReplacement()
                 self.undo.arm(original: selection.text, replacement: converted, bundleID: bundleID)
-                self.inputSources.select(other)
-                NSSound(named: "Tink")?.play()
+                if Settings.shared.switchLayoutAfterReplacement { self.inputSources.select(other) }
+                self.playFeedback()
             }
         }
     }
@@ -477,9 +501,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let reading = resolved
 
         let hot = context.current
+        // An explicit request overrides a learned exclusion: the user is asking
+        // for this one right now, which is newer information than the fact that
+        // they once refused it.
+        let learned: Set<String> = (!explicit && feedback.isRejected(reading.typed))
+            ? [reading.typed.lowercased()] : []
         let verdict = VetoGate.evaluate(.init(word: reading.typed,
                                               context: hot,
-                                              userExclusions: [],
+                                              minimumLength: minimumAutomaticLength,
+                                              userExclusions: learned,
                                               isExplicitRequest: explicit))
         if case .vetoed(let reason) = verdict {
             wordsVetoed.bump()
@@ -510,8 +540,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self.undo.arm(original: from, replacement: to, bundleID: bundleID)
                 // Switch the layout too, or the next word comes out wrong again
                 // and the correction was pointless.
-                self.inputSources.select(reading.target)
-                NSSound(named: "Tink")?.play()
+                if Settings.shared.switchLayoutAfterReplacement { self.inputSources.select(reading.target) }
+                self.playFeedback()
             }
         }
     }
@@ -528,7 +558,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self.isReplacing = false
                 guard outcome.succeeded else { self.note("откат не удался"); return }
                 self.undosMade.bump()
-                self.note("откат: вернули «\(pending.original)»")
+                // The word the user just rejected. Trimmed of the separator we
+                // added, so "ghbdtn " and "ghbdtn" are the same word.
+                let word = pending.replacement.trimmingCharacters(in: .whitespacesAndNewlines)
+                let becamePermanent = self.feedback.recordUndo(of: word)
+                self.note(becamePermanent
+                          ? "откат: «\(pending.original)». Слово больше не заменяется никогда"
+                          : "откат: вернули «\(pending.original)»")
                 self.tap.clearBufferAfterReplacement()
                 NSSound(named: "Pop")?.play()
             }

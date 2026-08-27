@@ -30,6 +30,15 @@ final class MenuBarController {
         redraw()
     }
 
+    /// Blinks the icon after a correction. The cheapest possible acknowledgement
+    /// that something changed, and it works with the sound turned off.
+    func flash() {
+        item.button?.alphaValue = 0.25
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) { [weak self] in
+            self?.item.button?.alphaValue = 1.0
+        }
+    }
+
     private func redraw() {
         let symbol: String
         switch (permissions, secureInputActive) {
@@ -73,10 +82,15 @@ final class MenuBarController {
         diag.target = target
         menu.addItem(diag)
 
-        let settings = NSMenuItem(title: "Открыть Универсальный доступ…",
-                                  action: #selector(AppDelegate.openAccessibilitySettings(_:)), keyEquivalent: "")
-        settings.target = target
-        menu.addItem(settings)
+        let preferences = NSMenuItem(title: "Настройки…",
+                                     action: #selector(AppDelegate.showSettings(_:)), keyEquivalent: ",")
+        preferences.target = target
+        menu.addItem(preferences)
+
+        let access = NSMenuItem(title: "Открыть Универсальный доступ…",
+                                action: #selector(AppDelegate.openAccessibilitySettings(_:)), keyEquivalent: "")
+        access.target = target
+        menu.addItem(access)
 
         menu.addItem(.separator())
         let quit = NSMenuItem(title: "Выйти", action: #selector(AppDelegate.quit(_:)), keyEquivalent: "q")

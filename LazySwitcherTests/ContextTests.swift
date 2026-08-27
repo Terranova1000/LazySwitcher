@@ -130,3 +130,112 @@ final class FocusClassificationTests: XCTestCase {
         XCTAssertEqual(FocusMonitor.classify(role: nil, subrole: nil), .unknown)
     }
 }
+
+/// Settings that change what the app is allowed to do.
+final class SettingsPolicyTests: XCTestCase {
+
+    private let suiteName = "com.lazyswitcher.tests.settings"
+
+    func testStoredPoliciesSurviveARestartButLockedAppsAreIgnored() {
+        let settings = Settings.shared
+        settings.store(policy: .hotkeyOnly, for: "com.example.editor")
+        // Even if a stored file somehow claims Terminal is allowed — a hand-edited
+        // plist, a migration gone wrong — the locked list wins on load.
+        settings.store(policy: .automatic, for: "com.apple.Terminal")
+
+        let store = AppPolicyStore(loadingFrom: settings)
+        XCTAssertEqual(store.policy(for: "com.example.editor"), .hotkeyOnly)
+        XCTAssertEqual(store.policy(for: "com.apple.Terminal"), .disabled,
+                       "Сохранённая настройка не должна открывать терминал")
+
+        settings.removePolicy(for: "com.example.editor")
+        settings.removePolicy(for: "com.apple.Terminal")
+    }
+
+    func testMinimumLengthCannotBeSetBelowFour() {
+        let settings = Settings.shared
+        let original = settings.minimumLength
+        settings.minimumLength = 1
+        XCTAssertEqual(settings.minimumLength, 4,
+                       "Ниже четырёх нельзя: там ложные срабатывания уже 2.78%")
+        settings.minimumLength = 99
+        XCTAssertEqual(settings.minimumLength, 8)
+        settings.minimumLength = original
+    }
+
+    func testSoundListIsNotEmptyAndDefaultIsInIt() {
+        XCTAssertFalse(Settings.availableSounds.isEmpty)
+        XCTAssertTrue(Settings.availableSounds.contains(Settings.shared.soundName))
+    }
+
+    /// Turning off the master switch must leave the hotkey working — it is the
+    /// difference between "stop deciding for me" and "stop existing".
+    func testDisablingAutomaticStillAllowsExplicitRequests() {
+        let hot = HotContext(isSecureInput: false, policy: .hotkeyOnly, fieldRole: .text)
+        XCTAssertFalse(hot.allowsAutomaticReplacement)
+        XCTAssertEqual(VetoGate.evaluate(.init(word: "ghbdtn", context: hot, isExplicitRequest: true)),
+                       .allowed)
+    }
+}
+
+/// Learning from undo — the only signal the app collects, and the one that has
+/// to be both effective and forgettable.
+final class FeedbackStoreTests: XCTestCase {
+
+    private var store: FeedbackStore!
+
+    override func setUp() {
+        super.setUp()
+        store = FeedbackStore()
+        store.forgetEverything()
+    }
+
+    override func tearDown() {
+        store.forgetEverything()
+        super.tearDown()
+    }
+
+    func testOneUndoStopsTheWordForThisSession() {
+        XCTAssertFalse(store.isRejected("ghbdtn"))
+        XCTAssertFalse(store.recordUndo(of: "ghbdtn"), "Одна отмена ещё не навсегда")
+        XCTAssertTrue(store.isRejected("ghbdtn"))
+    }
+
+    func testThreeUndosMakeItPermanent() {
+        _ = store.recordUndo(of: "ghbdtn")
+        _ = store.recordUndo(of: "ghbdtn")
+        XCTAssertTrue(store.recordUndo(of: "ghbdtn"), "Третья отмена делает правило постоянным")
+        XCTAssertTrue(store.permanentExclusions.contains("ghbdtn"))
+    }
+
+    func testRejectionIgnoresCase() {
+        _ = store.recordUndo(of: "GhBdTn")
+        XCTAssertTrue(store.isRejected("ghbdtn"))
+    }
+
+    /// Whatever the app learns has to be visible and removable. Learning the
+    /// user cannot see is a black box that will one day learn something silly
+    /// with nothing to fix it with.
+    func testEverythingLearnedCanBeSeenAndUndone() {
+        for _ in 0..<3 { _ = store.recordUndo(of: "ntcn") }
+        XCTAssertEqual(store.permanentExclusions, ["ntcn"])
+        store.forget("ntcn")
+        XCTAssertFalse(store.isRejected("ntcn"))
+        XCTAssertTrue(store.permanentExclusions.isEmpty)
+    }
+
+    func testForgettingEverythingClearsBothLevels() {
+        _ = store.recordUndo(of: "one")
+        for _ in 0..<3 { _ = store.recordUndo(of: "two") }
+        store.forgetEverything()
+        XCTAssertFalse(store.isRejected("one"))
+        XCTAssertFalse(store.isRejected("two"))
+    }
+
+    func testAnExcludedWordIsVetoed() {
+        let hot = HotContext(isSecureInput: false, policy: .automatic, fieldRole: .text)
+        XCTAssertEqual(VetoGate.evaluate(.init(word: "ghbdtn", context: hot,
+                                               userExclusions: ["ghbdtn"])),
+                       .vetoed(.userExclusion))
+    }
+}

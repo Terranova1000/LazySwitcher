@@ -68,6 +68,15 @@ final class AppPolicyStore {
 
     private var userOverrides: [String: AppPolicy] = [:]
 
+    init(loadingFrom settings: Settings? = nil) {
+        guard let settings else { return }
+        for (bundleID, raw) in settings.storedPolicies() {
+            guard let policy = AppPolicy(rawValue: UInt8(raw)), !Self.lockedExclusions.contains(bundleID)
+            else { continue }
+            userOverrides[bundleID] = policy
+        }
+    }
+
     func policy(for bundleID: String) -> AppPolicy {
         // Locked first: no override reaches past this.
         if Self.lockedExclusions.contains(bundleID) { return .disabled }
