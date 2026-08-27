@@ -19,11 +19,22 @@ final class KeyMapper {
         let layoutID: String
         /// Indexed by `index(keyCode:shift:option:)`. nil = key produces nothing here.
         fileprivate let entries: [String?]
+        fileprivate let reverse: [Character: (keyCode: UInt16, shift: Bool, option: Bool)]
 
         func character(keyCode: UInt16, shift: Bool, option: Bool = false) -> String? {
             let i = Table.index(keyCode: keyCode, shift: shift, option: option)
             guard i < entries.count else { return nil }
             return entries[i]
+        }
+
+        /// Character → the keystroke that produces it in this layout.
+        ///
+        /// Needed to convert text we did not watch being typed — a selection the
+        /// user made with the mouse, for instance. Where several keys produce the
+        /// same character the lowest key code wins, and unshifted beats shifted,
+        /// so the result is stable rather than dependent on iteration order.
+        func keystroke(for character: Character) -> (keyCode: UInt16, shift: Bool, option: Bool)? {
+            reverse[character]
         }
 
         fileprivate static func index(keyCode: UInt16, shift: Bool, option: Bool) -> Int {
@@ -46,6 +57,20 @@ final class KeyMapper {
     }
 
     func invalidate() { cache.removeAll() }
+
+    /// Reads existing text back into the keystrokes that produced it.
+    ///
+    /// Returns nil if any character has no key in this layout — a partial answer
+    /// would silently drop characters from the middle of the user's sentence.
+    func keystrokes(of text: String, in table: Table) -> [KeyRecord]? {
+        var keys: [KeyRecord] = []
+        keys.reserveCapacity(text.count)
+        for character in text {
+            guard let stroke = table.keystroke(for: character) else { return nil }
+            keys.append(KeyRecord(keyCode: stroke.keyCode, shift: stroke.shift, option: stroke.option))
+        }
+        return keys
+    }
 
     /// Renders a run of keystrokes as the given layout would have produced it.
     /// Returns nil if any key has no character there — a partial string would be
@@ -97,7 +122,22 @@ final class KeyMapper {
             }
         }
 
-        return Table(layoutID: id, entries: entries)
+        // Build the reverse map in a fixed order so ties resolve the same way
+        // every time: lowest key code first, unshifted before shifted, and no
+        // Option variants at all — those are typographic extras (± § ≈), not the
+        // characters people mean when they mistype a layout.
+        var reverse: [Character: (keyCode: UInt16, shift: Bool, option: Bool)] = [:]
+        for keyCode in 0..<UInt16(Table.keyCodeCount) {
+            for shift in [false, true] {
+                let slot = Table.index(keyCode: keyCode, shift: shift, option: false)
+                guard let text = entries[slot], text.count == 1, let character = text.first else { continue }
+                if reverse[character] == nil {
+                    reverse[character] = (keyCode, shift, false)
+                }
+            }
+        }
+
+        return Table(layoutID: id, entries: entries, reverse: reverse)
     }
 
     private static func translate(layout: UnsafePointer<UCKeyboardLayout>,

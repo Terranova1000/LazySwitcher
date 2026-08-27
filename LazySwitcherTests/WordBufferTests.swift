@@ -119,3 +119,85 @@ final class WordBufferTests: XCTestCase {
         XCTAssertTrue(buffer.isEmpty, "Обрезать начало значило бы молча испортить слово")
     }
 }
+
+/// The bug the user hit in real use: pressing the hotkey ate part of a
+/// neighbouring word.
+///
+/// Cause: the just-finished word stayed reachable for thirty seconds by the
+/// clock, and by then the caret had moved. Deleting "that many characters" then
+/// removes whatever happens to be in front of the cursor now. The rule is
+/// therefore not a time window at all — the word is reachable only while
+/// nothing whatsoever has happened since the space.
+final class JustCommittedTests: XCTestCase {
+
+    private var buffer: WordBuffer!
+    private enum VK {
+        static let g: UInt16 = 0x05, h: UInt16 = 0x04, b: UInt16 = 0x0B
+        static let space: UInt16 = 0x31, ret: UInt16 = 0x24
+        static let leftArrow: UInt16 = 0x7B
+    }
+
+    override func setUp() { super.setUp(); buffer = WordBuffer() }
+
+    private func press(_ code: UInt16, chord: Bool = false) {
+        _ = buffer.append(KeyRecord(keyCode: code), hasCommandControlOrOption: chord)
+    }
+
+    func testWordIsReachableImmediatelyAfterTheSpace() {
+        press(VK.g); press(VK.h); press(VK.space)
+        XCTAssertEqual(buffer.justCommitted?.keys.map(\.keyCode), [VK.g, VK.h])
+        XCTAssertEqual(buffer.justCommitted?.terminator, VK.space)
+    }
+
+    func testTypingAnythingElseMakesItUnreachable() {
+        press(VK.g); press(VK.space)
+        press(VK.b)
+        XCTAssertNil(buffer.justCommitted,
+                     "После нового символа каретка уже не сразу за словом")
+    }
+
+    /// Two spaces in a row: the caret has moved one further, so deleting
+    /// word+space would take the wrong characters.
+    func testASecondSpaceMakesItUnreachable() {
+        press(VK.g); press(VK.space)
+        press(VK.space)
+        XCTAssertNil(buffer.justCommitted)
+    }
+
+    func testCaretMovementMakesItUnreachable() {
+        press(VK.g); press(VK.space)
+        press(VK.leftArrow)
+        XCTAssertNil(buffer.justCommitted)
+    }
+
+    func testChordMakesItUnreachable() {
+        press(VK.g); press(VK.space)
+        press(VK.b, chord: true)
+        XCTAssertNil(buffer.justCommitted)
+    }
+
+    /// A click, a focus change, Secure Input — anything that wipes the buffer
+    /// for a reason other than finishing a word.
+    func testExternalResetMakesItUnreachable() {
+        for reason: WordBuffer.ResetReason in [.mouseClick, .focusChanged, .appChanged,
+                                               .secureInput, .idleTimeout] {
+            buffer.wipe(reason: .initial)
+            press(VK.g); press(VK.space)
+            XCTAssertNotNil(buffer.justCommitted)
+            buffer.wipe(reason: reason)
+            XCTAssertNil(buffer.justCommitted, "Сброс «\(reason)» обязан снимать досягаемость")
+        }
+    }
+
+    func testFinishingAWordDoesNotClearTheWordItJustFinished() {
+        press(VK.g); press(VK.h); press(VK.space)
+        XCTAssertNotNil(buffer.justCommitted, "Само завершение слова — единственный случай, когда память остаётся")
+    }
+
+    /// Return is recorded, but the caller must not retype it: in most apps it
+    /// has already sent the message or submitted the form.
+    func testReturnIsRecordedAsTerminatorButIsTheCallersProblem() {
+        press(VK.g); press(VK.ret)
+        XCTAssertEqual(buffer.justCommitted?.terminator, VK.ret)
+    }
+}

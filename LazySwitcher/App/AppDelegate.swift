@@ -209,24 +209,97 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 revert(pending)
                 return
             }
-            convertLastWord()
+            convertOnHotkey()
         }
     }
 
-    private func convertLastWord() {
-        // The in-progress word if there is one; otherwise the word the user
-        // just finished with a space.
-        tap.requestCurrentWord { [weak self] inProgress in
+    /// What the hotkey acts on, in priority order.
+    ///
+    /// Selection first: if the user went to the trouble of selecting text, that
+    /// is unambiguously what they mean, and it is the only way to fix a whole
+    /// sentence typed in the wrong layout.
+    private func convertOnHotkey() {
+        if let selection = TextSelection.current(), !selection.text.isEmpty {
+            convertSelection(selection)
+            return
+        }
+        tap.requestHotkeyTarget { [weak self] target in
             guard let self else { return }
-            if !inProgress.isEmpty {
-                apply(keys: inProgress, trailing: nil)
-            } else if let committed = lastCommitted,
-                      Date().timeIntervalSince(committed.at) < 30,
-                      committed.terminator == Self.spaceKeyCode {
-                apply(keys: committed.keys, trailing: " ")
+            if !target.inProgress.isEmpty {
+                apply(keys: target.inProgress, trailing: nil)
+            } else if let committed = target.justCommitted,
+                      let terminator = Self.terminatorText(committed.terminator) {
+                // Reachable only while nothing at all has happened since the
+                // space — the buffer guarantees that, not a stopwatch.
+                apply(keys: committed.keys, trailing: terminator)
             } else {
                 note("нечего исправлять")
                 NSSound.beep()
+            }
+        }
+    }
+
+    /// Only a space can be retyped as text. Tab and Return would have to be
+    /// re-sent as keys, and in most apps Return has already done something
+    /// irreversible — sent the message, submitted the form.
+    private static func terminatorText(_ keyCode: UInt16) -> String? {
+        keyCode == spaceKeyCode ? " " : nil
+    }
+
+    /// Converts a whole selection, however long, in one go.
+    ///
+    /// This is the answer to "I wrote a paragraph in the wrong layout". It reads
+    /// the selection back into keystrokes, renders them in the other layout and
+    /// writes the result over the selection — so spaces, punctuation and case all
+    /// come out where they were.
+    private func convertSelection(_ selection: TextSelection.Snapshot) {
+        guard let current = InputSourceService.currentLayout(),
+              let currentTable = keyMapper.table(for: current) else {
+            note("не удалось прочитать раскладку"); NSSound.beep(); return
+        }
+        let others = InputSourceService.enabledKeyboardLayouts().filter {
+            InputSourceService.identifier(of: $0) != currentTable.layoutID
+        }
+        guard let other = others.first, let otherTable = keyMapper.table(for: other) else {
+            note("не найдена вторая раскладка"); NSSound.beep(); return
+        }
+
+        // Read the text back into the keys that would have produced it, then ask
+        // what those keys mean in the other layout.
+        guard let keys = keyMapper.keystrokes(of: selection.text, in: currentTable),
+              let converted = keyMapper.render(keys, with: otherTable) else {
+            note("в выделении есть символы, которых нет в раскладке")
+            NSSound.beep()
+            return
+        }
+        guard converted != selection.text else { note("менять нечего"); NSSound.beep(); return }
+
+        let hot = context.current
+        // The safety context still applies in full: a selection inside a password
+        // field or a terminal is refused like anything else. What is deliberately
+        // NOT applied is the per-word shape rules — the user selected a sentence
+        // and asked for it, and vetoing it because it contains a full stop would
+        // be obtuse.
+        guard !hot.isSecureInput else { note("запрещено: включён Secure Input"); NSSound.beep(); return }
+        guard hot.policy != .disabled else { note("запрещено: в этом приложении выключено"); NSSound.beep(); return }
+        guard hot.fieldRole == .text || hot.allowsExplicitActionDespiteUnknownField else {
+            note("запрещено: поле не для обычного текста"); NSSound.beep(); return
+        }
+
+        let bundleID = context.currentCold.bundleID
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let self else { return }
+            // A selection is already highlighted, so typing replaces it — no
+            // backspaces, and nothing outside the selection can be touched.
+            let ok = TextSelection.replace(selection, with: converted, synthetic: replacer.syntheticSource)
+            DispatchQueue.main.async {
+                guard ok else { self.note("не удалось заменить выделение"); return }
+                self.replacementsMade.bump()
+                self.note("выделение (\(selection.text.count) симв.) → «\(converted.prefix(24))…»")
+                self.tap.clearBufferAfterReplacement()
+                self.undo.arm(original: selection.text, replacement: converted, bundleID: bundleID)
+                self.inputSources.select(other)
+                NSSound(named: "Tink")?.play()
             }
         }
     }

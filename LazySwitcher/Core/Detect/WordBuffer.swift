@@ -25,6 +25,19 @@ final class WordBuffer {
     /// Why the buffer was last cleared. Useful in diagnostics, never persisted.
     private(set) var lastResetReason: ResetReason = .initial
 
+    /// The word that was just finished, and the key that finished it.
+    ///
+    /// Kept so the hotkey can still reach the word after the user has typed the
+    /// space — which is when people actually notice the layout was wrong.
+    ///
+    /// Valid **only until the very next event of any kind**. That narrowness is
+    /// the whole point: this is a promise about where the caret is, and the
+    /// moment anything else happens — another key, a click, a focus change — the
+    /// promise is void. An earlier version kept it for thirty seconds by the
+    /// clock instead, and would then delete that many characters wherever the
+    /// caret happened to be by then, eating a neighbouring word.
+    private(set) var justCommitted: (keys: [KeyRecord], terminator: UInt16)?
+
     enum ResetReason {
         case initial, secureInput, focusChanged, appChanged, modifierChord
         case caretMoved, mouseClick, idleTimeout, wordCommitted, replacementApplied
@@ -66,6 +79,12 @@ final class WordBuffer {
     }
 
     func append(_ record: KeyRecord, hasCommandControlOrOption: Bool) -> AppendResult {
+        // Anything at all happening invalidates the just-committed word: the
+        // caret is no longer immediately after it.
+        let carriedOver = justCommitted
+        justCommitted = nil
+        _ = carriedOver
+
         // A chord means the keystroke did something other than type a letter, and
         // whatever it did we can no longer trust our model of the text.
         if hasCommandControlOrOption {
@@ -88,7 +107,9 @@ final class WordBuffer {
         if Self.boundaryKeyCodes.contains(record.keyCode) {
             let word = currentWord
             wipe(reason: .wordCommitted)
-            return word.isEmpty ? .ignored : .boundary(word: word, terminator: record.keyCode)
+            guard !word.isEmpty else { return .ignored }
+            justCommitted = (keys: word, terminator: record.keyCode)
+            return .boundary(word: word, terminator: record.keyCode)
         }
 
         guard record.keyCode < 128 else { return .ignored }
@@ -115,6 +136,9 @@ final class WordBuffer {
         _ = memset_s(storage.baseAddress, Self.capacity * MemoryLayout<KeyRecord>.stride,
                      0, Self.capacity * MemoryLayout<KeyRecord>.stride)
         count = 0
+        // Only a word ending leaves the caret where we think it is; every other
+        // reason means it moved, so the committed word stops being reachable.
+        if reason != .wordCommitted { justCommitted = nil }
         lastResetReason = reason
     }
 

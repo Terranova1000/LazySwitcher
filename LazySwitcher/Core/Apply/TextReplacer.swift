@@ -30,6 +30,7 @@ final class TextReplacer {
     }
 
     private let synthetic: SyntheticEventSource?
+    var syntheticSource: SyntheticEventSource? { synthetic }
     /// Apps where the accessibility route claimed success and changed nothing.
     /// Once burned we do not try it there again this session.
     private var accessibilityFailures: Set<String> = []

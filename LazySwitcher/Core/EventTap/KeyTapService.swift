@@ -287,13 +287,21 @@ final class KeyTapService {
 
     // MARK: - Invalidating the buffer from outside
 
-    /// Reads the in-progress word. Asynchronous because the buffer belongs to
-    /// the tap thread and nobody else may touch it.
-    func requestCurrentWord(_ completion: @escaping ([KeyRecord]) -> Void) {
-        guard let runLoop else { completion([]); return }
+    /// Reads what the hotkey may act on: the word being typed, or the one just
+    /// finished. Both come from the same hop to the tap thread, so they cannot
+    /// disagree with each other — asking twice could see a keystroke land in
+    /// between and act on a caret position that no longer exists.
+    struct HotkeyTarget {
+        let inProgress: [KeyRecord]
+        let justCommitted: (keys: [KeyRecord], terminator: UInt16)?
+    }
+
+    func requestHotkeyTarget(_ completion: @escaping (HotkeyTarget) -> Void) {
+        guard let runLoop else { completion(HotkeyTarget(inProgress: [], justCommitted: nil)); return }
         CFRunLoopPerformBlock(runLoop, CFRunLoopMode.commonModes.rawValue) { [weak self] in
-            let word = self?.wordBuffer.currentWord ?? []
-            DispatchQueue.main.async { completion(word) }
+            let target = HotkeyTarget(inProgress: self?.wordBuffer.currentWord ?? [],
+                                      justCommitted: self?.wordBuffer.justCommitted)
+            DispatchQueue.main.async { completion(target) }
         }
         CFRunLoopWakeUp(runLoop)
     }
