@@ -34,6 +34,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         RunLoop.main.add(t, forMode: .common)
         reportTimer = t
         M0Report.write(tap: tap, secureInput: secureInput)
+        M0TimeoutSweep.watchForTrigger(tap: tap)
     }
 
     private func startTapOrExplain() {

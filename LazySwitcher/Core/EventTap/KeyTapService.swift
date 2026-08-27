@@ -38,6 +38,8 @@ final class KeyTapService {
     /// that measures where macOS decides we are too slow. Written by the UI,
     /// read by the tap thread; a single aligned word, so no lock (rule 7).
     let injectedStallMilliseconds = AtomicCounter()
+    /// Same, but applied to our own synthetic events. M0 sweep only.
+    let sweepStallMilliseconds = AtomicCounter()
 
     /// Mirror of `IsSecureEventInputEnabled()`, refreshed by SecureInputMonitor.
     /// The callback must not call into Carbon itself, so it reads this instead.
@@ -160,6 +162,11 @@ final class KeyTapService {
         // 1. Our own synthetic events, first line, before anything else.
         //    Without this the corrections we type feed straight back in.
         if event.getIntegerValueField(.eventSourceUserData) == Self.syntheticMarker {
+            // M0 only: the timeout sweep drives the callback with events it posts
+            // itself, so it needs to stall here, on the one path that is otherwise
+            // a straight passthrough. Armed by nothing in a real build.
+            let sweepStall = sweepStallMilliseconds.value
+            if sweepStall > 0 { usleep(useconds_t(sweepStall * 1000)) }
             return Unmanaged.passUnretained(event)
         }
 

@@ -19,10 +19,19 @@ enum Permissions {
         /// The only question that matters: can we actually do our job?
         var isUsable: Bool { canListen && canPost }
 
-        /// Green checkbox in System Settings, dead APIs underneath. This is the
-        /// signature of a designated-requirement mismatch, and no amount of
-        /// clicking in the UI fixes it — only `tccutil reset` does.
-        var looksStuck: Bool { axTrusted && !probeTapCreated }
+        /// Green checkbox in System Settings, dead APIs underneath — the signature
+        /// of a designated-requirement mismatch, which no amount of clicking in the
+        /// UI fixes; only `tccutil reset` does.
+        ///
+        /// Deliberately built on `isUsable` and not on the probe tap: the probe is
+        /// optional, and an earlier version that keyed off it reported "stuck" on
+        /// every healthy launch where the probe had been skipped.
+        ///
+        /// Caveat this cannot distinguish on its own: right after the user grants
+        /// access, a process that started beforehand shows exactly this pattern
+        /// too, because CGPreflight* is answered from a per-process cache that
+        /// never refreshes. Callers must rule that out by relaunching first.
+        var looksStuck: Bool { axTrusted && !isUsable }
     }
 
     static func current(runProbe: Bool = true) -> State {
