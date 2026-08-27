@@ -2,7 +2,43 @@ import AppKit
 import Carbon.HIToolbox
 
 /// Enumerating, reading and switching keyboard layouts.
+///
+/// **Every function here must be called on the main thread.** Text Input Sources
+/// is one of the HIToolbox APIs that asserts this internally, and the failure is
+/// not a warning or a wrong answer — `dispatch_assert_queue` traps and the
+/// process dies:
+///
+///     _dispatch_assert_queue_fail
+///     islGetInputSourceListWithAdditions
+///     TSMGetInputSourceProperty
+///     InputSourceService.stringProperty(_:_:)
+///
+/// That crash happened twice in real use before it was found, from the decide
+/// queue, which is why callers off the main thread read `LayoutPair` instead.
+/// The precondition below turns a crash in somebody's hands into a crash in the
+/// test suite, at the call site that caused it.
 final class InputSourceService {
+
+    /// Both layouts and everything needed to reason about them, captured on the
+    /// main thread so other queues can read it without touching TIS.
+    ///
+    /// A value type all the way down: `KeyMapper.Table` is a struct of strings,
+    /// so a copy is a copy and there is nothing to race on. The `TISInputSource`
+    /// references are carried only to hand back to `select`, which itself runs
+    /// on the main thread.
+    struct LayoutPair {
+        let source: KeyMapper.Table
+        let target: KeyMapper.Table
+        let sourceLanguage: String
+        let targetLanguage: String
+        let targetInputSource: TISInputSource
+    }
+
+    private static func requireMainThread(_ function: StaticString = #function) {
+        #if DEBUG
+        dispatchPrecondition(condition: .onQueue(.main))
+        #endif
+    }
 
     /// When the user last switched layouts by hand. We stay out of their way for
     /// a couple of seconds afterwards, or we end up in a switching war with them
@@ -22,6 +58,7 @@ final class InputSourceService {
     /// `kTISPropertyInputSourceIsEnableCapable` is NOT the filter for this: it
     /// means "may be enabled", not "is enabled".
     static func enabledKeyboardLayouts() -> [TISInputSource] {
+        requireMainThread()
         let filter: [CFString: Any] = [
             kTISPropertyInputSourceCategory: kTISCategoryKeyboardInputSource as Any
         ]
@@ -43,20 +80,24 @@ final class InputSourceService {
     ///                                             one underneath an input method  ← ours
     ///   TISCopyCurrentASCIICapableKeyboardLayoutInputSource — last ASCII-capable one
     static func currentLayout() -> TISInputSource? {
-        TISCopyCurrentKeyboardLayoutInputSource()?.takeRetainedValue()
+        requireMainThread()
+        return TISCopyCurrentKeyboardLayoutInputSource()?.takeRetainedValue()
     }
 
     /// TISGetInputSourceProperty is a *Get* function: the result is not owned and
     /// must not be released, hence takeUnretainedValue throughout.
     static func identifier(of source: TISInputSource) -> String? {
-        stringProperty(source, kTISPropertyInputSourceID)
+        requireMainThread()
+        return stringProperty(source, kTISPropertyInputSourceID)
     }
 
     static func localizedName(of source: TISInputSource) -> String? {
-        stringProperty(source, kTISPropertyLocalizedName)
+        requireMainThread()
+        return stringProperty(source, kTISPropertyLocalizedName)
     }
 
     static func primaryLanguage(of source: TISInputSource) -> String? {
+        requireMainThread()
         guard let raw = TISGetInputSourceProperty(source, kTISPropertyInputSourceLanguages),
               let langs = Unmanaged<CFArray>.fromOpaque(raw).takeUnretainedValue() as? [String]
         else { return nil }
@@ -73,6 +114,7 @@ final class InputSourceService {
     /// Switches layouts, unless the user just did it themselves.
     @discardableResult
     func select(_ source: TISInputSource) -> Bool {
+        Self.requireMainThread()
         let now = Date()
         // Never twice in quick succession.
         guard now.timeIntervalSince(lastOwnSwitch) > 0.3 else { return false }

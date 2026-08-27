@@ -48,6 +48,8 @@ final class KeyMapper {
 
     // MARK: - Public
 
+    /// - Important: main thread only. It reads TIS properties, which trap when
+    ///   called from anywhere else (see `InputSourceService`).
     func table(for source: TISInputSource) -> Table? {
         guard let id = InputSourceService.identifier(of: source) else { return nil }
         if let cached = cache[id] { return cached }

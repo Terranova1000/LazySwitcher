@@ -286,11 +286,28 @@ final class LocalizationTests: XCTestCase {
         let bundle = Bundle(for: AppDelegate.self)
         guard let path = bundle.path(forResource: language, ofType: "lproj"),
               let lproj = Bundle(path: path),
-              let url = lproj.url(forResource: "Localizable", withExtension: "strings"),
-              let dictionary = NSDictionary(contentsOf: url) as? [String: String] else {
+              let url = lproj.url(forResource: "Localizable", withExtension: "strings") else {
             throw XCTSkip("Нет ресурсов для языка «\(language)»")
         }
+        // Fail rather than skip past this point: the file exists, so if it will
+        // not parse that is a syntax error in the translation, and skipping it
+        // would hide a broken interface behind a green run.
+        let dictionary = try XCTUnwrap(NSDictionary(contentsOf: url) as? [String: String],
+                                       "Файл переводов «\(language)» не разбирается — "
+                                     + "скорее всего пропущена точка с запятой или кавычка")
         return dictionary
+    }
+
+    /// The whole point of localization is that `L()` returns a translation and
+    /// not the key. A missing .strings file in the bundle looks exactly like a
+    /// working app until you read the labels.
+    func testLookupReturnsTranslationsNotKeys() throws {
+        for key in ["menu.quit", "settings.tab.general", "veto.secureInput",
+                    "hotkey.doubleShift", "onboarding.step1.title"] {
+            let value = L(key)
+            XCTAssertNotEqual(value, key, "«\(key)» не переводится — файл в бандле?")
+            XCTAssertFalse(value.isEmpty)
+        }
     }
 
     func testRussianAndEnglishHaveTheSameKeys() throws {

@@ -35,6 +35,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// Recent words, for settling short ones by their neighbours.
     private var chain = WordChain()
+
+    /// Layouts, captured on the main thread for the decide queue to read.
+    ///
+    /// Rebuilt when the layout changes, not on every word: building it walks
+    /// 128 key codes through `UCKeyTranslate` twice, which is cheap but not free,
+    /// and — the actual reason — it touches TIS, which may only happen here.
+    private var layouts: InputSourceService.LayoutPair?
+    private var layoutsLock = os_unfair_lock_s()
+
+    private var currentLayouts: InputSourceService.LayoutPair? {
+        os_unfair_lock_lock(&layoutsLock)
+        defer { os_unfair_lock_unlock(&layoutsLock) }
+        return layouts
+    }
     let chainRescues = AtomicCounter()
 
     /// Shortest word we will convert on our own. Measured, not guessed: at five
@@ -117,8 +131,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         mouse.onClick = { [weak self] in self?.tap.invalidateBuffer(reason: .mouseClick) }
         mouse.start()
 
-        inputSources.onLayoutChanged = { [weak self] in self?.keyMapper.invalidate() }
+        inputSources.onLayoutChanged = { [weak self] in
+            guard let self else { return }
+            keyMapper.invalidate()
+            refreshLayouts()
+        }
         inputSources.startWatching()
+        refreshLayouts()
 
         tap.onWordCommitted = { [weak self] word, terminator in
             self?.evaluate(word, terminator: terminator)
@@ -190,6 +209,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         RunLoop.main.add(t, forMode: .common)
         permissionTimer = t
+    }
+
+    /// Main thread only — it reads TIS.
+    private func refreshLayouts() {
+        dispatchPrecondition(condition: .onQueue(.main))
+        guard let current = InputSourceService.currentLayout(),
+              let currentTable = keyMapper.table(for: current),
+              let sourceLanguage = InputSourceService.primaryLanguage(of: current) else {
+            os_unfair_lock_lock(&layoutsLock); layouts = nil; os_unfair_lock_unlock(&layoutsLock)
+            return
+        }
+        let others = InputSourceService.enabledKeyboardLayouts().filter {
+            InputSourceService.identifier(of: $0) != currentTable.layoutID
+        }
+        guard let other = others.first,
+              let targetLanguage = InputSourceService.primaryLanguage(of: other),
+              let otherTable = keyMapper.table(for: other) else {
+            os_unfair_lock_lock(&layoutsLock); layouts = nil; os_unfair_lock_unlock(&layoutsLock)
+            return
+        }
+        let pair = InputSourceService.LayoutPair(source: currentTable, target: otherTable,
+                                                 sourceLanguage: sourceLanguage,
+                                                 targetLanguage: targetLanguage,
+                                                 targetInputSource: other)
+        os_unfair_lock_lock(&layoutsLock)
+        layouts = pair
+        os_unfair_lock_unlock(&layoutsLock)
     }
 
     private func publishContext(bundleID: String, appName: String) {
@@ -378,21 +424,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let targetLanguage: String
     }
 
+    /// Safe from any queue: it reads the cached layout pair and does no TIS calls.
     private func read(_ word: [KeyRecord]) -> Reading? {
-        guard let current = InputSourceService.currentLayout(),
-              let currentTable = keyMapper.table(for: current),
-              let sourceLanguage = InputSourceService.primaryLanguage(of: current) else { return nil }
-        let others = InputSourceService.enabledKeyboardLayouts().filter {
-            InputSourceService.identifier(of: $0) != currentTable.layoutID
-        }
-        guard let other = others.first,
-              let targetLanguage = InputSourceService.primaryLanguage(of: other),
-              let otherTable = keyMapper.table(for: other),
-              let typed = keyMapper.render(word, with: currentTable),
-              let alternative = keyMapper.render(word, with: otherTable)
+        guard let pair = currentLayouts,
+              let typed = keyMapper.render(word, with: pair.source),
+              let alternative = keyMapper.render(word, with: pair.target)
         else { return nil }
-        return Reading(typed: typed, alternative: alternative, target: other,
-                       sourceLanguage: sourceLanguage, targetLanguage: targetLanguage)
+        return Reading(typed: typed, alternative: alternative, target: pair.targetInputSource,
+                       sourceLanguage: pair.sourceLanguage, targetLanguage: pair.targetLanguage)
     }
 
     // MARK: - Hotkey
@@ -452,16 +491,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// writes the result over the selection — so spaces, punctuation and case all
     /// come out where they were.
     private func convertSelection(_ selection: TextSelection.Snapshot) {
-        guard let current = InputSourceService.currentLayout(),
-              let currentTable = keyMapper.table(for: current) else {
+        guard let pair = currentLayouts else {
             note("не удалось прочитать раскладку"); NSSound.beep(); return
         }
-        let others = InputSourceService.enabledKeyboardLayouts().filter {
-            InputSourceService.identifier(of: $0) != currentTable.layoutID
-        }
-        guard let other = others.first, let otherTable = keyMapper.table(for: other) else {
-            note("не найдена вторая раскладка"); NSSound.beep(); return
-        }
+        let currentTable = pair.source, otherTable = pair.target, other = pair.targetInputSource
 
         // Read the text back into the keys that would have produced it, then ask
         // what those keys mean in the other layout.
