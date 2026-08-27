@@ -70,6 +70,7 @@ enum M0Report {
             row("откатов", "\(delegate.undosMade.value)")
             row("последнее действие", delegate.lastReplacementNote)
             row("автозамен", "\(delegate.automaticReplacements.value)")
+            row("спасено цепочкой", "\(delegate.chainRescues.value)")
             row("последнее решение", delegate.lastDecisionNote)
             row("модели загружены", delegate.modelStore.loadedLanguages.joined(separator: ", "))
             let ctx = delegate.context.current

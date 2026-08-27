@@ -74,10 +74,22 @@ final class InputSourceService {
     @discardableResult
     func select(_ source: TISInputSource) -> Bool {
         let now = Date()
-        // Two guards against a switching war: never twice in quick succession,
-        // and never on top of a switch the user made moments ago.
+        // Never twice in quick succession.
         guard now.timeIntervalSince(lastOwnSwitch) > 0.3 else { return false }
-        guard now.timeIntervalSince(lastManualSwitch) > 2.0 else { return false }
+
+        // Back off only from an actual fight — the user undoing *our* switch —
+        // rather than from any manual switch at all.
+        //
+        // The first version refused for two seconds after any manual change, and
+        // that swallowed the most ordinary case there is: switch to English by
+        // hand, type a word in the wrong layout, we correct the text and then
+        // leave the layout wrong, so the next word is wrong too. The loop worth
+        // preventing needs the user to switch back right after we switched, and
+        // that is what this now checks.
+        if lastManualSwitch > lastOwnSwitch,
+           lastManualSwitch.timeIntervalSince(lastOwnSwitch) < 2.0 {
+            return false
+        }
 
         suppressNextChangeNotification = true
         let status = TISSelectInputSource(source)

@@ -16,6 +16,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let undo = UndoController()
     let modelStore = ModelStore()
 
+    /// Replacements run here, one at a time.
+    ///
+    /// They used to go to `DispatchQueue.global`, which is concurrent — so a
+    /// second word finishing while the first was still typing interleaved their
+    /// backspaces and characters. That is what "it sometimes eats the space
+    /// before the word" looks like from the outside. A replacement is a sequence
+    /// of events with sleeps between them and is only correct if nothing else is
+    /// posting keys at the same time.
+    private let applyQueue = DispatchQueue(label: "com.lazyswitcher.apply", qos: .userInitiated)
+
+    /// True while events are being posted. Anything that would start a second
+    /// replacement is dropped rather than queued: by the time the first one
+    /// finishes, the caret is somewhere else and the second one's idea of what
+    /// to delete is stale.
+    private var isReplacing = false
+
+    /// Recent words, for settling short ones by their neighbours.
+    private var chain = WordChain()
+    let chainRescues = AtomicCounter()
+
     /// Shortest word we will convert on our own. Measured, not guessed: at five
     /// characters false positives are 0.00%, at four they are 0.87%
     /// (eval/report.md). Below five the user has to ask.
@@ -99,6 +119,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.evaluate(word, terminator: terminator)
         }
         tap.onHotkey = { [weak self] event in self?.handle(hotkey: event) }
+        tap.onBufferInvalidated = { [weak self] _ in
+            // The chain is a claim about text sitting on screen in a known
+            // place. Once the caret has moved, it is a claim about nothing.
+            self?.chain.clear()
+        }
 
         startTapOrExplain()
         // Deliberately not opened at launch. A menu-bar agent that throws a
@@ -178,12 +203,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // Any new typing means the previous replacement is no longer the
             // thing sitting in front of the caret.
             undo.invalidate()
-            if case .vetoed(let reason) = verdict {
+            switch verdict {
+            case .vetoed(.tooShort):
+                // Not allowed to act on its own — but this is exactly the kind of
+                // word the next one rescues, so it still has to be scored and
+                // remembered. The length rule governs what we may *do*, not what
+                // we may *know*.
+                lastVetoReason = nil
+            case .vetoed(let reason):
+                // A safety veto — a password shape, an address, a path. Break the
+                // chain: whatever this is, it must not be swept into a run later.
                 wordsVetoed.bump()
                 lastVetoReason = reason
+                chain.clear()
                 return
+            case .allowed:
+                lastVetoReason = nil
             }
-            lastVetoReason = nil
             considerAutomatic(word: word,
                               typed: reading.typed,
                               alternative: reading.alternative,
@@ -205,24 +241,87 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                                    target: TISInputSource,
                                    trailing: String?) {
         let hot = context.current
-        guard hot.allowsAutomaticReplacement else { return }
-        guard typed.count >= minimumAutomaticLength else {
-            lastDecisionNote = "«\(typed)»: короче \(minimumAutomaticLength) — только по хоткею"
-            return
-        }
         guard let sourceModel = modelStore.model(for: sourceLanguage),
               let targetModel = modelStore.model(for: targetLanguage) else {
             lastDecisionNote = "нет модели для \(sourceLanguage)→\(targetLanguage)"
             return
         }
-
         let scorer = Scorer(models: .init(source: sourceModel, target: targetModel))
         let (decision, evidence) = scorer.decide(typed: typed, converted: alternative)
-        lastDecisionNote = String(format: "«%@» %@ Λ=%.2f", typed, "\(decision)", evidence.perCharacter)
-        guard decision == .convert else { return }
+
+        // The chain is recorded whatever we decide — a word we left alone is
+        // exactly the kind the next word may rescue.
+        defer {
+            chain.append(.init(typed: typed, alternative: alternative,
+                               separator: trailing ?? "", evidence: evidence,
+                               converted: false))
+        }
+
+        guard hot.allowsAutomaticReplacement else { return }
+
+        let longEnough = typed.count >= minimumAutomaticLength
+        // A short word may still go if the one before it just went: the run is
+        // demonstrably in the wrong layout, so this is no longer a coin flip.
+        let inherits = !longEnough
+            && chain.previousWasConverted
+            && WordChain.mayInherit(evidence)
+            && decision != .keep
+
+        guard longEnough || inherits else {
+            lastDecisionNote = "«\(typed)»: короче \(minimumAutomaticLength), ждём соседа"
+            return
+        }
+        guard decision == .convert || inherits else {
+            lastDecisionNote = String(format: "«%@» %@ Λ=%.2f", typed, "\(decision)", evidence.perCharacter)
+            return
+        }
+
+        // Now look left: short words we passed over are probably wrong too.
+        let rescued = chain.retroactiveCandidates()
+        var from = typed + (trailing ?? "")
+        var to = alternative + (trailing ?? "")
+        for entry in rescued.reversed() {
+            from = entry.onScreen + entry.separator + from
+            to = entry.alternative + entry.separator + to
+        }
+
+        lastDecisionNote = rescued.isEmpty
+            ? String(format: "«%@» convert Λ=%.2f%@", typed, evidence.perCharacter, inherits ? " (по соседу)" : "")
+            : String(format: "«%@» convert, с ним %d слева", typed, rescued.count)
 
         automaticReplacements.bump()
-        apply(keys: word, trailing: trailing, explicit: false, precomputed: (typed, alternative, target))
+        if !rescued.isEmpty { chainRescues.bump() }
+        applyRun(from: from, to: to, target: target, marking: rescued.count + 1)
+    }
+
+    /// Replaces a run of already-typed text in one operation.
+    ///
+    /// One operation rather than several on purpose: separate replacements would
+    /// each have to be correct about where the caret is after the previous one,
+    /// and the whole point of the chain is that these words sit next to each
+    /// other, so the run is a single known string.
+    private func applyRun(from: String, to: String, target: TISInputSource, marking count: Int) {
+        let bundleID = context.currentCold.bundleID
+        guard !isReplacing else { note("пропущено: предыдущая замена ещё идёт"); return }
+        isReplacing = true
+        applyQueue.async { [weak self] in
+            guard let self else { return }
+            let outcome = replacer.replace(original: from, with: to, in: bundleID)
+            DispatchQueue.main.async {
+                self.isReplacing = false
+                guard outcome.succeeded else { self.note("замена не удалась"); return }
+                self.replacementsMade.bump()
+                self.note("\(outcome.strategy.rawValue): «\(from)» → «\(to)»")
+                self.chain.markConverted(count: count)
+                self.undo.arm(original: from, replacement: to, bundleID: bundleID)
+                self.inputSources.select(target)
+                self.playFeedback()
+            }
+        }
+    }
+
+    private func playFeedback() {
+        NSSound(named: "Tink")?.play()
     }
 
     /// Renders a run of keystrokes in the active layout and in the other one.
@@ -342,12 +441,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         let bundleID = context.currentCold.bundleID
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+        guard !isReplacing else { NSSound.beep(); return }
+        isReplacing = true
+        applyQueue.async { [weak self] in
             guard let self else { return }
             // A selection is already highlighted, so typing replaces it — no
             // backspaces, and nothing outside the selection can be touched.
             let ok = TextSelection.replace(selection, with: converted, synthetic: replacer.syntheticSource)
             DispatchQueue.main.async {
+                self.isReplacing = false
                 guard ok else { self.note("не удалось заменить выделение"); return }
                 self.replacementsMade.bump()
                 self.note("выделение (\(selection.text.count) симв.) → «\(converted.prefix(24))…»")
@@ -391,12 +493,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let from = reading.typed + (trailing ?? "")
         let to = reading.alternative + (trailing ?? "")
 
+        guard !isReplacing else { note("пропущено: предыдущая замена ещё идёт"); return }
+        isReplacing = true
+
         // Off the main thread: synthetic typing sleeps between events, and a
         // ten-letter word is over a hundred milliseconds of it.
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+        applyQueue.async { [weak self] in
             guard let self else { return }
             let outcome = replacer.replace(original: from, with: to, in: bundleID)
             DispatchQueue.main.async {
+                self.isReplacing = false
                 guard outcome.succeeded else { self.note("замена не удалась"); return }
                 self.replacementsMade.bump()
                 self.note("\(outcome.strategy.rawValue): «\(reading.typed)» → «\(reading.alternative)»")
@@ -411,12 +517,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func revert(_ pending: UndoController.Pending) {
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+        guard !isReplacing else { NSSound.beep(); return }
+        isReplacing = true
+        applyQueue.async { [weak self] in
             guard let self else { return }
             let outcome = replacer.replace(original: pending.replacement,
                                            with: pending.original,
                                            in: pending.bundleID)
             DispatchQueue.main.async {
+                self.isReplacing = false
                 guard outcome.succeeded else { self.note("откат не удался"); return }
                 self.undosMade.bump()
                 self.note("откат: вернули «\(pending.original)»")

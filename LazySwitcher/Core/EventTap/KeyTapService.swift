@@ -56,6 +56,11 @@ final class KeyTapService {
     /// A hotkey fired. Delivered on the main queue.
     var onHotkey: ((HotkeyDetector.Event) -> Void)?
 
+    /// The buffer was cleared for a reason other than a word ending. Whoever is
+    /// remembering recent words has to forget them too: our knowledge of where
+    /// the text is has just expired.
+    var onBufferInvalidated: ((WordBuffer.ResetReason) -> Void)?
+
     private let decideQueue = DispatchQueue(label: "com.lazyswitcher.decide", qos: .userInitiated)
 
     /// Mach absolute time of the last keystroke, for the idle timeout.
@@ -237,7 +242,11 @@ final class KeyTapService {
                      || flags.contains(.maskAlternate)
             let record = KeyRecord(event: event, timestamp: now)
 
-            if case .boundary(let word, let terminator) = wordBuffer.append(record, hasCommandControlOrOption: chord) {
+            let outcome = wordBuffer.append(record, hasCommandControlOrOption: chord)
+            if case .reset(let reason) = outcome, let handler = onBufferInvalidated {
+                DispatchQueue.main.async { handler(reason) }
+            }
+            if case .boundary(let word, let terminator) = outcome {
                 // Hand off and get out. Scoring, dictionaries and anything that
                 // could block belong on the other queue.
                 if let handler = onWordCommitted {
@@ -321,6 +330,9 @@ final class KeyTapService {
             self?.hotkeyDetector.reset()
         }
         CFRunLoopWakeUp(runLoop)
+        if let handler = onBufferInvalidated {
+            DispatchQueue.main.async { handler(reason) }
+        }
     }
 
     /// Called when Secure Input turns on: nothing typed may outlive it.
