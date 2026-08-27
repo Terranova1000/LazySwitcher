@@ -488,7 +488,7 @@ final class SettingsWindowController: NSWindowController, NSToolbarDelegate, NSW
             image.imageScaling = .scaleProportionallyUpOrDown
             image.translatesAutoresizingMaskIntoConstraints = false
             image.widthAnchor.constraint(equalToConstant: 460).isActive = true
-            image.heightAnchor.constraint(equalToConstant: 230).isActive = true
+            image.heightAnchor.constraint(equalToConstant: 216).isActive = true
             image.wantsLayer = true
             image.layer?.cornerRadius = 10
             image.layer?.masksToBounds = true
@@ -551,7 +551,13 @@ final class SettingsWindowController: NSWindowController, NSToolbarDelegate, NSW
         links.alignment = .center
         links.preferredMaxLayoutWidth = 420
 
-        let rows: [NSView] = [name, version, showBanner, facts, buttons, auto, updateStatus, links]
+        let uninstall = NSButton(title: L("about.uninstall"), target: self,
+                                 action: #selector(uninstall(_:)))
+        uninstall.bezelStyle = .accessoryBarAction
+        uninstall.controlSize = .small
+
+        let rows: [NSView] = [name, version, showBanner, facts, buttons, auto, updateStatus,
+                              links, uninstall]
         for view in rows {
             stack.addArrangedSubview(view)
         }
@@ -565,6 +571,28 @@ final class SettingsWindowController: NSWindowController, NSToolbarDelegate, NSW
         bannerRow?.isHidden = settings.bannerHidden
         bannerToggleButton?.isHidden = !settings.bannerHidden
         if current == .about { show(.about) }
+    }
+
+    @objc private func uninstall(_ sender: Any?) {
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = L("about.uninstall.title")
+        alert.informativeText = L("about.uninstall.body")
+        alert.addButton(withTitle: L("about.uninstall.confirm"))
+        alert.addButton(withTitle: L("about.uninstall.cancel"))
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+
+        let problems = Uninstaller.removeEverything()
+        if !problems.isEmpty {
+            let report = NSAlert()
+            report.messageText = L("about.uninstall.title")
+            report.informativeText = problems.joined(separator: "\n")
+            report.runModal()
+        }
+        // Leave them in front of the bundle: the app cannot delete itself while
+        // running, and hunting for it afterwards is the step people abandon.
+        Uninstaller.revealInFinder()
+        NSApp.terminate(nil)
     }
 
     @objc private func toggleAutoUpdates(_ sender: NSButton) {

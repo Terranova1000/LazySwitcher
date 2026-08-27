@@ -20,6 +20,7 @@ __pycache__/
 
 .DS_Store
 
-# Ассеты подключены копией в LazySwitcher/Assets.xcassets
-LazySwitcher-macOS-icons/
-banner-LazySwitcher.png
+# Отложенный корпус — порождается ./Tools/build-models/all.sh.
+# Модели (*.lsmodel) при этом отслеживаются: без них приложение не собрать,
+# а сборщика на стороне сервера у нас нет.
+Tools/eval/corpus/

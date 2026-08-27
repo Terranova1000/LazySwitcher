@@ -14,10 +14,14 @@
 	<string>Lazy Switcher</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
+	<!-- Через переменные сборки, а не числом.
+	     Номер, записанный здесь руками, расходится с MARKETING_VERSION молча:
+	     проект собирается, образ называется одной версией, «О программе»
+	     показывает другую, а проверка обновлений сравнивает третью. -->
 	<key>CFBundleShortVersionString</key>
-	<string>0.1.0</string>
+	<string>$(MARKETING_VERSION)</string>
 	<key>CFBundleVersion</key>
-	<string>1</string>
+	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>$(MACOSX_DEPLOYMENT_TARGET)</string>
 	<!-- Агент в строке меню: без иконки в Dock и без пункта в переключателе окон -->

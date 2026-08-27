@@ -72,3 +72,82 @@ final class InterfaceSmokeTests: XCTestCase {
         }
     }
 }
+
+/// Uninstall, and the promise it makes.
+final class UninstallerTests: XCTestCase {
+
+    /// Dragging an app to the Trash leaves its preferences behind — so the list
+    /// of places to clean has to actually name them, or "remove settings" is a
+    /// button that does nothing visible.
+    func testLeftoversPointAtRealLocations() {
+        let support = Uninstaller.supportDirectory
+        XCTAssertTrue(support.path.contains("Application Support"))
+        XCTAssertTrue(support.lastPathComponent == "Lazy Switcher")
+    }
+
+    /// The menu bar icon is our own drawing, and a template one: if it ever
+    /// loses that flag it stops inverting on a dark menu bar and turns into a
+    /// black smudge there.
+    func testMenuBarIconExistsAndIsATemplate() throws {
+        let image = try XCTUnwrap(NSImage(named: "MenuBarIcon"),
+                                  "Иконка строки меню не попала в каталог ассетов")
+        XCTAssertTrue(image.isTemplate, "Иконка обязана быть шаблоном, иначе не перекрасится")
+        XCTAssertGreaterThan(image.size.width, 0)
+    }
+
+    /// The banner had black rounded corners baked into it, which showed through
+    /// as dark wedges. Fixed by cropping; this checks the corners are light so
+    /// the crop cannot be lost in a future re-export.
+    func testBannerCornersAreNotBlack() throws {
+        let banner = try XCTUnwrap(NSImage(named: "Banner"))
+        guard let tiff = banner.tiffRepresentation,
+              let bitmap = NSBitmapImageRep(data: tiff) else {
+            return XCTFail("Баннер не читается как растр")
+        }
+        let w = bitmap.pixelsWide, h = bitmap.pixelsHigh
+        for (x, y, corner) in [(2, 2, "верх-лево"), (w - 3, 2, "верх-право"),
+                               (2, h - 3, "низ-лево"), (w - 3, h - 3, "низ-право")] {
+            let colour = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB)
+            let brightness = colour?.brightnessComponent ?? 0
+            XCTAssertGreaterThan(brightness, 0.12,
+                                 "Угол «\(corner)» тёмный — вернулись запечённые чёрные скругления")
+        }
+    }
+}
+
+/// Version numbers, which have four places to disagree.
+final class VersionTests: XCTestCase {
+
+    /// `Info.plist` used to carry the number as a literal while the project
+    /// carried `MARKETING_VERSION` separately, and the two drifted apart in
+    /// silence: the image was named one version, About showed another, and the
+    /// update check compared a third. The plist now takes the build setting, and
+    /// this checks the substitution actually happened — an unexpanded
+    /// `$(MARKETING_VERSION)` looks fine in the file and ships as literal text.
+    func testBundleVersionIsARealNumber() {
+        let version = UpdateChecker.currentVersion
+        XCTAssertFalse(version.contains("$"), "Подстановка не сработала: «\(version)»")
+        XCTAssertFalse(version.isEmpty)
+        let parts = version.split(separator: ".")
+        XCTAssertFalse(parts.isEmpty)
+        for part in parts {
+            XCTAssertNotNil(Int(part), "«\(version)» — не номер версии")
+        }
+    }
+
+    /// Every configuration in the project has to agree, or a Debug build reports
+    /// a different version from the Release one and nobody notices until an
+    /// update check misfires.
+    func testAllProjectConfigurationsCarryTheSameVersion() throws {
+        let project = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("LazySwitcher.xcodeproj/project.pbxproj")
+        let text = try String(contentsOf: project, encoding: .utf8)
+        let found = Set(text.components(separatedBy: "MARKETING_VERSION = ").dropFirst()
+            .compactMap { $0.split(separator: ";").first.map(String.init) })
+        XCTAssertEqual(found.count, 1,
+                       "Версии разошлись между конфигурациями: \(found.sorted())")
+        XCTAssertEqual(found.first, UpdateChecker.currentVersion,
+                       "Проект и собранный бандл не согласны о версии")
+    }
+}

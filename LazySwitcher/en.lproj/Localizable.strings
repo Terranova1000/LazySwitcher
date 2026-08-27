@@ -32,10 +32,9 @@
 "hotkey.rightCommand" = "Right ⌘ Command";
 "hotkey.rightOption" = "Right ⌥ Option";
 "hotkey.rightControl" = "Right ⌃ Control";
-"hotkey.explain.shift" = "Familiar if you have used Caramba. The standard complaint about tools like this is that the gesture fires while you type capitals, so a tap only counts here when no other key was pressed between Shift going down and coming back up.";
-"hotkey.explain.otherModifier" = "Never conflicts with typing capitals. It can collide with shortcuts in code editors — if it does, turn that app off on the Apps tab.";
-"hotkey.explain.rightModifier" = "One press instead of two. Right-hand modifiers are almost never used on their own, so this misfires least of all. Not an option if your keyboard has no right-hand modifier.";
-
+"hotkey.explain.shift" = "Does not interfere with typing capitals: Shift plus a letter never counts.";
+"hotkey.explain.otherModifier" = "Never confused with capitals. May clash with a shortcut in a code editor.";
+"hotkey.explain.rightModifier" = "One press instead of two. Least likely to fire by accident.";
 /* Settings — tabs */
 "settings.window.title" = "Lazy Switcher Settings";
 "settings.tab.general" = "General";
@@ -127,10 +126,12 @@ The gesture, the sound and the app list are all adjustable in Settings.";
 "settings.row.startup" = "Startup";
 "settings.row.correction" = "Correction";
 "settings.row.signal" = "Feedback";
-"settings.keys.does" = "What it does";
+"settings.keys.does" = "What the gesture does";
 "settings.keys.pauseLabel" = "Pause";
 "settings.keys.pause" = "Left and right Shift together";
-"settings.keys.what" = "With a selection, converts it. Right after a correction, undoes it. Otherwise, the last word.";
+"settings.keys.what" = "Corrects the last word.
+Select text with the mouse and it converts the whole selection.
+Right after a correction, undoes it.";
 "settings.apps.risky" = "Browsers";
 "settings.apps.showProtected" = "Show protected apps";
 "about.version" = "Version %@";
@@ -142,3 +143,9 @@ The gesture, the sound and the app list are all adjustable in Settings.";
 "settings.permissions.copyCommand" = "Copy the command";
 "settings.permissions.copied" = "Copied — paste it into Terminal";
 "about.links" = "Source code, dictionary licences and the reasoning behind each decision are on the project page.";
+
+"about.uninstall" = "Remove settings…";
+"about.uninstall.title" = "Remove Lazy Switcher settings?";
+"about.uninstall.body" = "This removes your settings, the app list and the learned exclusions. The app itself stays — drag it to the Trash yourself.\n\nThe Accessibility permission is cleared by the system once the app is gone.";
+"about.uninstall.confirm" = "Remove and quit";
+"about.uninstall.cancel" = "Cancel";

@@ -59,14 +59,28 @@ final class MenuBarController {
     }
 
     private func redraw() {
-        let symbol: String
+        let symbol: String?
+        // Our own sloth for the working state, system symbols for everything
+        // that needs attention. A warning triangle and a padlock are understood
+        // at a glance by everybody; a custom glyph for "something is wrong"
+        // would have to be learned first, and the moment it matters is the worst
+        // moment to be learning it.
         switch (permissions, secureInputActive, paused) {
         case (.missing, _, _), (.stuck, _, _): symbol = "exclamationmark.triangle"
         case (_, true, _):                     symbol = "lock.fill"
         case (_, _, true):                     symbol = "pause.circle"
-        default:                               symbol = "character.cursor.ibeam"
+        default:                               symbol = nil          // ленивец
         }
-        let image = NSImage(systemSymbolName: symbol, accessibilityDescription: "Lazy Switcher")
+        let image: NSImage?
+        if let symbol {
+            image = NSImage(systemSymbolName: symbol, accessibilityDescription: "Lazy Switcher")
+        } else {
+            // Sized explicitly: a status item does not scale its image, and the
+            // vector arrives at whatever size the PDF was drawn at.
+            let sloth = NSImage(named: "MenuBarIcon")
+            sloth?.size = NSSize(width: 18, height: 18)
+            image = sloth
+        }
         image?.isTemplate = true
         item.button?.image = image
         item.menu?.item(withTag: MenuTag.status.rawValue)?.title = statusLine

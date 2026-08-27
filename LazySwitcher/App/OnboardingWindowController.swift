@@ -62,7 +62,7 @@ final class OnboardingWindowController: NSWindowController {
         banner.layer?.masksToBounds = true
         NSLayoutConstraint.activate([
             banner.widthAnchor.constraint(equalToConstant: 456),
-            banner.heightAnchor.constraint(equalToConstant: 228),
+            banner.heightAnchor.constraint(equalToConstant: 214),
         ])
 
         title = NSTextField(labelWithString: "")
