@@ -1,6 +1,19 @@
 import AppKit
 import CoreGraphics
 
+// ВЕСЬ ЭТОТ ФАЙЛ — ТОЛЬКО ДЛЯ ОТЛАДКИ.
+//
+// Леса вокруг разработки: они запускаются по появлению файла-триггера в
+// ~/Library/Application Support/Lazy Switcher/, а часть из них умеет
+// синтезировать нажатия клавиш. В приложении с доступом Accessibility это
+// означает, что любой, кто способен записать файл в домашнюю папку, может
+// заставить программу печатать. Для отладки — необходимый инструмент, в
+// готовом продукте — вектор атаки, которого не должно существовать.
+//
+// Поэтому весь файл вырезается из Release на этапе компиляции: не «выключен
+// флагом», не «спрятан за настройкой», а физически отсутствует в бинарнике.
+#if DEBUG
+
 /// Finds the point at which macOS decides our tap callback is too slow.
 ///
 /// Apple documents that `.tapDisabledByTimeout` exists but never says what the
@@ -107,3 +120,4 @@ enum M0TimeoutSweep {
         return stallsMilliseconds[index - 1]
     }
 }
+#endif

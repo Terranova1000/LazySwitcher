@@ -89,9 +89,12 @@ final class MenuBarController {
         menu.addItem(status)
         menu.addItem(.separator())
 
-        let diag = NSMenuItem(title: L("menu.diagnostics"), action: #selector(AppDelegate.showDiagnostics(_:)), keyEquivalent: "d")
+        #if DEBUG
+        let diag = NSMenuItem(title: L("menu.diagnostics"),
+                              action: #selector(AppDelegate.showDiagnostics(_:)), keyEquivalent: "d")
         diag.target = target
         menu.addItem(diag)
+        #endif
 
         let preferences = NSMenuItem(title: L("menu.settings"),
                                      action: #selector(AppDelegate.showSettings(_:)), keyEquivalent: ",")

@@ -3,6 +3,19 @@ import ApplicationServices
 import Carbon.HIToolbox
 import CoreGraphics
 
+// ВЕСЬ ЭТОТ ФАЙЛ — ТОЛЬКО ДЛЯ ОТЛАДКИ.
+//
+// Леса вокруг разработки: они запускаются по появлению файла-триггера в
+// ~/Library/Application Support/Lazy Switcher/, а часть из них умеет
+// синтезировать нажатия клавиш. В приложении с доступом Accessibility это
+// означает, что любой, кто способен записать файл в домашнюю папку, может
+// заставить программу печатать. Для отладки — необходимый инструмент, в
+// готовом продукте — вектор атаки, которого не должно существовать.
+//
+// Поэтому весь файл вырезается из Release на этапе компиляции: не «выключен
+// флагом», не «спрятан за настройкой», а физически отсутствует в бинарнике.
+#if DEBUG
+
 /// End-to-end check of automatic correction: types like a person would and sees
 /// whether the text fixes itself.
 ///
@@ -165,3 +178,4 @@ enum M5SelfTest {
         return value as? String
     }
 }
+#endif

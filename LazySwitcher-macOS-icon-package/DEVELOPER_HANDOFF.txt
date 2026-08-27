@@ -1,0 +1,7 @@
+Lazy Switcher macOS Icon
+
+Drop Assets.xcassets/AppIcon.appiconset into your project's Assets.xcassets
+and select AppIcon in the target's App Icons settings.
+
+The icon is transparent outside the rounded-square artwork and contains
+A / Я language-switching symbolism.

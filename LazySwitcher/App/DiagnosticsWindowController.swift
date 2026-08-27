@@ -1,5 +1,18 @@
 import AppKit
 
+// ВЕСЬ ЭТОТ ФАЙЛ — ТОЛЬКО ДЛЯ ОТЛАДКИ.
+//
+// Леса вокруг разработки: они запускаются по появлению файла-триггера в
+// ~/Library/Application Support/Lazy Switcher/, а часть из них умеет
+// синтезировать нажатия клавиш. В приложении с доступом Accessibility это
+// означает, что любой, кто способен записать файл в домашнюю папку, может
+// заставить программу печатать. Для отладки — необходимый инструмент, в
+// готовом продукте — вектор атаки, которого не должно существовать.
+//
+// Поэтому весь файл вырезается из Release на этапе компиляции: не «выключен
+// флагом», не «спрятан за настройкой», а физически отсутствует в бинарнике.
+#if DEBUG
+
 /// The whole of M0: a window that answers the questions the roadmap says must be
 /// answered before any real code is written.
 ///
@@ -242,3 +255,4 @@ final class DiagnosticsWindowController: NSWindowController {
         return out
     }
 }
+#endif

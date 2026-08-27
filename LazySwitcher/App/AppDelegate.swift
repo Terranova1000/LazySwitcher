@@ -65,7 +65,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
     private var lastCommitted: Committed?
     private var menuBar: MenuBarController!
+    #if DEBUG
     private var diagnostics: DiagnosticsWindowController?
+    #endif
     private var settingsWindow: SettingsWindowController?
     private var onboarding: OnboardingWindowController?
     private var reportTimer: Timer?
@@ -134,7 +136,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // focus back from the app being tested. The report file is written
         // either way; the window is available from the menu.
 
-        // M0 scaffolding — remove at M1.
+        // Debug scaffolding. Compiled out of Release entirely — these watch for
+        // trigger files and some of them can synthesise keystrokes, which is a
+        // useful tool during development and an attack surface in a shipped app.
+        #if DEBUG
         let t = Timer(timeInterval: 2, repeats: true) { [weak self] _ in
             guard let self else { return }
             M0Report.write(tap: tap, secureInput: secureInput)
@@ -145,6 +150,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         M0TimeoutSweep.watchForTrigger(tap: tap)
         M4SelfTest.watchForTrigger(delegate: self)
         M5SelfTest.watchForTrigger(delegate: self)
+        #endif
         tap.setHotkeyStyle(Settings.shared.hotkeyStyle)
 
         // Only if the user asked for it, and at most weekly.
@@ -586,6 +592,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    #if DEBUG
     /// Entry point for `M4SelfTest`, which needs to drive a replacement without
     /// a keyboard. Same code path as the hotkey, no shortcuts.
     func applyForSelfTest(keys: [KeyRecord]) {
@@ -607,17 +614,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard let reading = read(keys) else { return nil }
         return (reading.typed, reading.alternative)
     }
+    #endif
 
     private func note(_ text: String) {
         DispatchQueue.main.async { [weak self] in self?.lastReplacementNote = text }
     }
 
     @objc func showDiagnostics(_ sender: Any?) {
+        #if DEBUG
         if diagnostics == nil {
             diagnostics = DiagnosticsWindowController(tap: tap, secureInput: secureInput)
         }
         NSApp.activate(ignoringOtherApps: true)
         diagnostics?.showWindow(nil)
+        #endif
     }
 
     @objc func openReleasesPage(_ sender: Any?) {
