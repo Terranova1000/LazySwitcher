@@ -203,7 +203,7 @@ final class DiagnosticsWindowController: NSWindowController {
         row("из них читаемы в обеих", "\(delegate?.wordsConvertible.value ?? 0)")
         row("запрещено к замене", "\(delegate?.wordsVetoed.value ?? 0)")
         if let reason = delegate?.lastVetoReason {
-            row("последний запрет", reason.rawValue)
+            row("последний запрет", reason.localizedDescription)
         }
         row("замен сделано", "\(delegate?.replacementsMade.value ?? 0)")
         row("откатов", "\(delegate?.undosMade.value ?? 0)")

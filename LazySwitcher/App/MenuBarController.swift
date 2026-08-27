@@ -34,7 +34,7 @@ final class MenuBarController {
     /// a background agent that pops an alert to say hello is a nuisance.
     func showUpdateAvailable(version: String) {
         guard let menu = item.menu else { return }
-        let title = "Доступна версия \(version) — скачать…"
+        let title = L("menu.update.available", version)
         if menu.items.contains(where: { $0.title == title }) { return }
         let entry = NSMenuItem(title: title, action: #selector(AppDelegate.openReleasesPage(_:)),
                                keyEquivalent: "")
@@ -67,17 +67,15 @@ final class MenuBarController {
 
     private var statusLine: String {
         switch permissions {
-        case .missing: return "Нет доступа к Универсальному доступу"
-        case .stuck:   return "Доступ «залип» — нужен сброс"
+        case .missing: return L("menu.status.noAccess")
+        case .stuck:   return L("menu.status.stuck")
         case .granted: break
         }
-        if secureInputActive {
-            if let who = SecureInputMonitor.likelyResponsibleProcess() {
-                return "Приостановлено: похоже, ввод перехватил «\(who.name)»"
-            }
-            return "Приостановлено: ввод защищён системой"
-        }
-        return "M0 — разведка боем"
+        // No name here on purpose: the API that would supply it does not work on
+        // macOS 15 (00-DECISIONS.md, Н13), and a name taken from a guess is
+        // worse than no name.
+        if secureInputActive { return L("menu.status.pausedSecureInput") }
+        return L("menu.status.active")
     }
 
     private enum MenuTag: Int { case status = 1 }
@@ -91,22 +89,22 @@ final class MenuBarController {
         menu.addItem(status)
         menu.addItem(.separator())
 
-        let diag = NSMenuItem(title: "Диагностика…", action: #selector(AppDelegate.showDiagnostics(_:)), keyEquivalent: "d")
+        let diag = NSMenuItem(title: L("menu.diagnostics"), action: #selector(AppDelegate.showDiagnostics(_:)), keyEquivalent: "d")
         diag.target = target
         menu.addItem(diag)
 
-        let preferences = NSMenuItem(title: "Настройки…",
+        let preferences = NSMenuItem(title: L("menu.settings"),
                                      action: #selector(AppDelegate.showSettings(_:)), keyEquivalent: ",")
         preferences.target = target
         menu.addItem(preferences)
 
-        let access = NSMenuItem(title: "Открыть Универсальный доступ…",
+        let access = NSMenuItem(title: L("menu.accessibility"),
                                 action: #selector(AppDelegate.openAccessibilitySettings(_:)), keyEquivalent: "")
         access.target = target
         menu.addItem(access)
 
         menu.addItem(.separator())
-        let quit = NSMenuItem(title: "Выйти", action: #selector(AppDelegate.quit(_:)), keyEquivalent: "q")
+        let quit = NSMenuItem(title: L("menu.quit"), action: #selector(AppDelegate.quit(_:)), keyEquivalent: "q")
         quit.target = target
         menu.addItem(quit)
 

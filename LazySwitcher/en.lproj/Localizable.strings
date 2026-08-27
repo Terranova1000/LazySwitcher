@@ -1,0 +1,104 @@
+/* Menu bar */
+"menu.status.active" = "Active";
+"menu.status.noAccess" = "No Accessibility permission";
+"menu.status.stuck" = "Permission is stuck — needs a reset";
+"menu.status.pausedSecureInput" = "Paused: input is protected by the system";
+"menu.diagnostics" = "Diagnostics…";
+"menu.settings" = "Settings…";
+"menu.accessibility" = "Open Accessibility settings…";
+"menu.quit" = "Quit";
+"menu.update.available" = "Version %@ is available — download…";
+
+/* Reasons for refusing */
+"veto.secureInput" = "secure input is on";
+"veto.appPolicy" = "turned off in this app";
+"veto.fieldRole" = "not an ordinary text field";
+"veto.tooShort" = "word is below the minimum length";
+"veto.tooLong" = "word is longer than 24 characters";
+"veto.userExclusion" = "word is on your “never change” list";
+"veto.looksLikeAddress" = "looks like a URL, email or IP address";
+"veto.looksLikePath" = "looks like a file path";
+"veto.hasDigits" = "letters mixed with digits";
+"veto.identifierShape" = "camelCase, snake_case or kebab-case";
+"veto.looksLikePassword" = "looks like a password";
+"veto.shortAllCaps" = "short all-caps abbreviation";
+"veto.notLetters" = "not a word made of letters";
+
+/* Gestures */
+"hotkey.doubleShift" = "Double-tap ⇧ Shift";
+"hotkey.doubleOption" = "Double-tap ⌥ Option";
+"hotkey.doubleControl" = "Double-tap ⌃ Control";
+"hotkey.doubleCommand" = "Double-tap ⌘ Command";
+"hotkey.rightCommand" = "Right ⌘ Command";
+"hotkey.rightOption" = "Right ⌥ Option";
+"hotkey.rightControl" = "Right ⌃ Control";
+"hotkey.explain.shift" = "Familiar if you have used Caramba. The standard complaint about tools like this is that the gesture fires while you type capitals, so a tap only counts here when no other key was pressed between Shift going down and coming back up.";
+"hotkey.explain.otherModifier" = "Never conflicts with typing capitals. It can collide with shortcuts in code editors — if it does, turn that app off on the Apps tab.";
+"hotkey.explain.rightModifier" = "One press instead of two. Right-hand modifiers are almost never used on their own, so this misfires least of all. Not an option if your keyboard has no right-hand modifier.";
+
+/* Settings — tabs */
+"settings.window.title" = "Lazy Switcher Settings";
+"settings.tab.general" = "General";
+"settings.tab.keys" = "Keys";
+"settings.tab.sound" = "Sound";
+"settings.tab.apps" = "Apps";
+"settings.tab.updates" = "Updates";
+
+/* Settings — general */
+"settings.launchAtLogin" = "Launch at login";
+"settings.launchAtLogin.notInApplications" = "The app is not running from the Applications folder. Launching at login is unreliable from anywhere else — move it there.";
+"settings.launchAtLogin.needsApproval" = "One step left: confirm in System Settings → General → Login Items.";
+"settings.launchAtLogin.unavailable" = "Launch at login is unavailable: %@";
+"settings.launchAtLogin.failed" = "Failed: %@";
+"settings.automatic" = "Correct automatically";
+"settings.minimumLength" = "Minimum word length:";
+"settings.minimumLength.option" = "%d characters or more";
+"settings.minimumLength.hint" = "At five characters, false positives measured zero across 25,000 words; at four, roughly one word in a hundred and fifteen. Shorter words are still corrected when the following word confirms the layout.";
+"settings.switchLayout" = "Switch keyboard layout after correcting";
+
+/* Settings — keys */
+"settings.keys.action" = "Correct:";
+"settings.keys.hint" = "The gesture does different things depending on the situation:\n• text is selected — the whole selection is converted;\n• a correction just happened — it is undone, and the word is remembered as “never change”;\n• otherwise — the last word is corrected.\n\nLeft and right Shift together pauses the app. That gesture does not move with the setting above: it is what you reach for when something has gone wrong, so it has to be the same one always.";
+
+/* Settings — sound */
+"settings.sound.enabled" = "Play a sound when correcting";
+"settings.sound.choose" = "Sound:";
+"settings.sound.preview" = "Play";
+"settings.sound.volume" = "Volume:";
+"settings.sound.hint" = "A sound is the cheapest way to notice that the text changed without looking away from what you are typing. If it grates, turn it off — the menu bar icon blinks either way.";
+
+/* Settings — apps */
+"settings.apps.unidentified" = "Also work where the field type cannot be determined";
+"settings.apps.unidentified.hint" = "⚠️ Chrome and Firefox give no indication whatsoever that a field is a password field — neither through the accessibility tree nor through the macOS secure input mode. This was measured, not assumed. While this box is unchecked, only your chosen gesture works there, and you decide where to press it. Turn it on and automatic correction becomes able to fire inside a password field.";
+"settings.apps.title" = "Applications";
+"settings.apps.column.app" = "Application";
+"settings.apps.column.mode" = "Mode";
+"settings.apps.mode.disabled" = "off";
+"settings.apps.mode.hotkeyOnly" = "gesture only";
+"settings.apps.mode.automatic" = "automatic";
+"settings.apps.locked.hint" = "Terminals, password managers and virtual machines are marked with a lock and cannot be changed.";
+
+/* Settings — updates */
+"settings.updates.version" = "Version %@";
+"settings.updates.checkNow" = "Check now";
+"settings.updates.openPage" = "Open the downloads page";
+"settings.updates.automatic" = "Check for updates once a week";
+"settings.updates.checking" = "Checking…";
+"settings.updates.upToDate" = "You have the latest version (%@)";
+"settings.updates.available" = "Version %1$@ is out; you have %2$@";
+"settings.updates.failed" = "Could not check: %@";
+"settings.updates.hint" = "This is the only place where the app opens a network connection, and by default it does not.\n\nWhat a check does: one request to the releases page on GitHub. Nothing is sent — no version, no identifier, no statistics; the request has no body at all. But the other side of it, stated plainly: GitHub can see that someone at your address asked about this program at that time. That is not nothing, so the choice is yours rather than ours.\n\nThe “Open the downloads page” button needs no network at all — it simply opens your browser.";
+
+/* First run */
+"onboarding.window.title" = "First run";
+"onboarding.step1.title" = "Lazy Switcher";
+"onboarding.step1.body" = "Spots text typed in the wrong keyboard layout and fixes it.\n\nghbdtn  →  привет\nруддщ   →  hello\n\nIt switches the layout too, so the rest of the sentence comes out right.\n\nFree. Runs on your machine. Nothing you type is written to disk or sent anywhere.";
+"onboarding.step1.primary" = "Next";
+"onboarding.step2.title" = "Permission needed";
+"onboarding.step2.body" = "macOS will not let a program see what you type without your consent. That is as it should be, and here is what the consent means in practice.\n\nThe app sees keystrokes. That is why it is built so that what you type lives in memory for a few seconds and is then wiped — it goes into no file, no log and no crash report.\n\nWhat it does not see: when the system turns on secure input — at the login window, in a password manager, in an ordinary app's password field — the keystrokes simply never reach it. Not “we choose not to look”, but physically absent.\n\nAnd, honestly, the limit of that: on websites, no browser turns that mode on. There a password field is recognised from the page's accessibility markup — which works in Safari, and does not work in Chrome or Firefox, so in those only manual correction is available by default.\n\nPress the button, switch “Lazy Switcher” on in the list, and come back here.";
+"onboarding.step2.primary" = "Open Accessibility settings";
+"onboarding.step2.secondary" = "Skip";
+"onboarding.step3.title" = "All set";
+"onboarding.step3.body" = "Everything works.\n\nType a word in the wrong layout and press space — it fixes itself, as long as the word is longer than four characters.\n\nYour chosen gesture (double Shift by default):\n• text is selected — the whole selection is converted;\n• a correction just happened — it is undone, and the word is remembered as “never change”;\n• otherwise — the last word is corrected.\n\nLeft and right Shift together pauses the app.\n\nAll of this is adjustable in Settings: the gesture, the sound and the list of apps.";
+"onboarding.step3.primary" = "Get started";
+"onboarding.step3.secondary" = "Open Settings";

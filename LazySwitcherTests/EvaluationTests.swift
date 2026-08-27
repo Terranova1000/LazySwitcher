@@ -32,6 +32,10 @@ final class EvaluationTests: XCTestCase {
         var convertedWhenItShouldNot = 0      // ложное срабатывание — самое дорогое
         var keptWhenItShouldNot = 0
         var undecidedWhenItShouldNot = 0
+        /// Misses caused specifically by both readings being real words — the
+        /// case §6 of the algorithm proposes to settle with Zipf frequencies.
+        var missedBecauseBothAreWords = 0
+        var missedForOtherReasons = 0
 
         var shouldTotal: Int { convertedWhenItShould + missedWhenItShould + undecidedWhenItShould }
         var shouldNotTotal: Int { convertedWhenItShouldNot + keptWhenItShouldNot + undecidedWhenItShouldNot }
@@ -118,13 +122,20 @@ final class EvaluationTests: XCTestCase {
             let alternative = typedInWrongLayout ? word : mapper.render(keys, with: otherTable)
             guard let onScreen, let alternative else { continue }
 
-            let (decision, _) = scorer.decide(typed: onScreen, converted: alternative)
+            let (decision, evidence) = scorer.decide(typed: onScreen, converted: alternative)
             var tally = byLength[word.count] ?? Tally()
             if typedInWrongLayout {
                 switch decision {
                 case .convert: tally.convertedWhenItShould += 1
                 case .keep: tally.missedWhenItShould += 1
                 case .undecided: tally.undecidedWhenItShould += 1
+                }
+                if decision != .convert {
+                    if evidence.typedIsKnownWord && evidence.convertedIsKnownWord {
+                        tally.missedBecauseBothAreWords += 1
+                    } else {
+                        tally.missedForOtherReasons += 1
+                    }
                 }
             } else {
                 switch decision {
@@ -149,6 +160,8 @@ final class EvaluationTests: XCTestCase {
                 current.convertedWhenItShouldNot += value.convertedWhenItShouldNot
                 current.keptWhenItShouldNot += value.keptWhenItShouldNot
                 current.undecidedWhenItShouldNot += value.undecidedWhenItShouldNot
+                current.missedBecauseBothAreWords += value.missedBecauseBothAreWords
+                current.missedForOtherReasons += value.missedForOtherReasons
                 result[length] = current
             }
         }
@@ -164,10 +177,52 @@ final class EvaluationTests: XCTestCase {
                 total.convertedWhenItShouldNot += value.convertedWhenItShouldNot
                 total.keptWhenItShouldNot += value.keptWhenItShouldNot
                 total.undecidedWhenItShouldNot += value.undecidedWhenItShouldNot
+                total.missedBecauseBothAreWords += value.missedBecauseBothAreWords
+                total.missedForOtherReasons += value.missedForOtherReasons
             }
     }
 
     // MARK: - Tests
+
+    /// Focused check on short words, where the "both readings are real words"
+    /// case actually lives.
+    ///
+    /// The main measurement samples the word list evenly, which under-represents
+    /// short words badly — 44 two-letter words out of 25,000. That is far too
+    /// thin to conclude anything about a case that is supposed to occur in three
+    /// two-letter words out of five, so this takes every short word there is.
+    func testShortWordsWhereBothReadingsAreRealWords() throws {
+        let ru = try corpus("ru", limit: 1_000_000).filter { $0.count <= 5 }
+        let en = try corpus("en", limit: 1_000_000).filter { $0.count <= 5 }
+        XCTAssertGreaterThan(ru.count + en.count, 500, "Коротких слов слишком мало для вывода")
+
+        let a = measure(words: ru, sourceTable: russianTable, otherTable: englishTable,
+                        sourceModel: russianModel, otherModel: englishModel, typedInWrongLayout: true)
+        let b = measure(words: en, sourceTable: englishTable, otherTable: russianTable,
+                        sourceModel: englishModel, otherModel: russianModel, typedInWrongLayout: true)
+        let all = merge([a, b])
+
+        var lines = ["", "## Короткие слова: все, а не выборка", "",
+                     "| длина | случаев | пропусков | из них оба слова настоящие |",
+                     "|---|---|---|---|"]
+        var totalCollisions = 0, totalMissed = 0
+        for length in 1...5 {
+            let t = bucket(all, length...length)
+            let missed = t.missedBecauseBothAreWords + t.missedForOtherReasons
+            totalCollisions += t.missedBecauseBothAreWords
+            totalMissed += missed
+            lines.append("| \(length) | \(t.shouldTotal) | \(missed) | \(t.missedBecauseBothAreWords) |")
+        }
+        lines.append("")
+        lines.append("Пропусков \(totalMissed), из них из-за столкновения словарей \(totalCollisions).")
+        let text = lines.joined(separator: "\n") + "\n"
+        print(text)
+
+        let url = Self.repositoryRoot.appendingPathComponent("eval/short-words.md")
+        try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(),
+                                                 withIntermediateDirectories: true)
+        try? text.write(to: url, atomically: true, encoding: .utf8)
+    }
 
     func testMeasureAndWriteReport() throws {
         let limit = 6000
@@ -229,6 +284,26 @@ final class EvaluationTests: XCTestCase {
         пропуск, просто вежливый. Слово чинится хоткеем за полсекунды.
 
         """
+        // What would Zipf frequencies actually buy? §6 of the algorithm proposes
+        // them for the one case the dictionaries cannot settle: both readings
+        // are real words. Worth knowing how big that case is before paying for
+        // a frequency list, its licence and its attribution.
+        report += "\n## Что упирается в «оба слова настоящие»\n\n"
+        report += "| длина | пропусков всего | из них оба слова настоящие | доля |\n|---|---|---|---|\n"
+        for (label, range) in buckets where !label.hasPrefix("—") {
+            let t = bucket(all, range)
+            let missed = t.missedBecauseBothAreWords + t.missedForOtherReasons
+            guard missed > 0 else { continue }
+            let share = Double(t.missedBecauseBothAreWords) / Double(missed) * 100
+            report += String(format: "| %@ | %d | %d | %.1f%% |\n",
+                             label, missed, t.missedBecauseBothAreWords, share)
+        }
+        let whole = bucket(all, 1...40)
+        let allMissed = whole.missedBecauseBothAreWords + whole.missedForOtherReasons
+        report += String(format: "\nВсего пропусков %d, из них по этой причине %d (%.1f%%).\n",
+                         allMissed, whole.missedBecauseBothAreWords,
+                         allMissed == 0 ? 0 : Double(whole.missedBecauseBothAreWords) / Double(allMissed) * 100)
+
         let url = Self.repositoryRoot.appendingPathComponent("eval/report.md")
         try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(),
                                                  withIntermediateDirectories: true)

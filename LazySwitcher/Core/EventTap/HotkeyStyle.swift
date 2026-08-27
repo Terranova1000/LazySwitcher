@@ -21,33 +21,16 @@ enum HotkeyStyle: String, CaseIterable {
     case rightOption
     case rightControl
 
-    var title: String {
-        switch self {
-        case .doubleShift:   return "Двойное нажатие ⇧ Shift"
-        case .doubleOption:  return "Двойное нажатие ⌥ Option"
-        case .doubleControl: return "Двойное нажатие ⌃ Control"
-        case .doubleCommand: return "Двойное нажатие ⌘ Command"
-        case .rightCommand:  return "Правый ⌘ Command"
-        case .rightOption:   return "Правый ⌥ Option"
-        case .rightControl:  return "Правый ⌃ Control"
-        }
-    }
+    var title: String { L("hotkey.\(rawValue)") }
 
     var explanation: String {
         switch self {
         case .doubleShift:
-            return "Привычно тем, кто пользовался Caramba. Самый частый повод для жалоб "
-                 + "у таких программ — срабатывание при наборе заглавных, поэтому здесь "
-                 + "тап засчитывается, только если между нажатием и отпусканием Shift не "
-                 + "было ни одной другой клавиши."
+            return L("hotkey.explain.shift")
         case .doubleOption, .doubleControl, .doubleCommand:
-            return "С заглавными не конфликтует вовсе. Может пересекаться с сочетаниями "
-                 + "в редакторах кода — если мешает, такое приложение можно выключить "
-                 + "во вкладке «Приложения»."
+            return L("hotkey.explain.otherModifier")
         case .rightCommand, .rightOption, .rightControl:
-            return "Одно нажатие вместо двух. Правые модификаторы почти никогда не "
-                 + "используются сами по себе, поэтому ложных срабатываний меньше всего. "
-                 + "Не подойдёт, если на клавиатуре нет правого модификатора."
+            return L("hotkey.explain.rightModifier")
         }
     }
 

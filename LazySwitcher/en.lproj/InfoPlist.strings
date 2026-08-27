@@ -1,0 +1,2 @@
+"NSAccessibilityUsageDescription" = "Needed to spot text typed in the wrong keyboard layout and correct it.";
+"CFBundleName" = "Lazy Switcher";

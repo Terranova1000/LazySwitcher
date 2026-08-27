@@ -529,7 +529,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if case .vetoed(let reason) = verdict {
             wordsVetoed.bump()
             lastVetoReason = reason
-            note("запрещено: \(reason.rawValue)")
+            note("запрещено: \(reason.localizedDescription)")
             NSSound.beep()
             return
         }

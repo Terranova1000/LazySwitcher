@@ -17,20 +17,29 @@ enum VetoGate {
         case vetoed(Reason)
     }
 
-    enum Reason: String, Equatable {
-        case secureInput = "включён Secure Input"
-        case appPolicy = "в этом приложении выключено"
-        case fieldRole = "поле не для обычного текста"
-        case tooShort = "слово короче минимума"
-        case tooLong = "слово длиннее 24 символов"
-        case userExclusion = "слово в списке «не менять»"
-        case looksLikeAddress = "похоже на адрес, почту или IP"
-        case looksLikePath = "похоже на путь к файлу"
-        case hasDigits = "буквы вперемешку с цифрами"
-        case identifierShape = "camelCase, snake_case или kebab-case"
-        case looksLikePassword = "похоже на пароль"
-        case shortAllCaps = "короткая аббревиатура"
-        case notLetters = "не буквенное слово"
+    /// Why a word was refused.
+    ///
+    /// `rawValue` is a stable identifier, deliberately not the sentence shown to
+    /// the user. It was the sentence once, and that made the Russian wording
+    /// load-bearing: it was simultaneously a value compared in tests, a key in
+    /// logs and a line of interface text, so translating the interface would
+    /// have silently broken the other two.
+    enum Reason: String, Equatable, CaseIterable {
+        case secureInput
+        case appPolicy
+        case fieldRole
+        case tooShort
+        case tooLong
+        case userExclusion
+        case looksLikeAddress
+        case looksLikePath
+        case hasDigits
+        case identifierShape
+        case looksLikePassword
+        case shortAllCaps
+        case notLetters
+
+        var localizedDescription: String { L("veto.\(rawValue)") }
     }
 
     struct Input {

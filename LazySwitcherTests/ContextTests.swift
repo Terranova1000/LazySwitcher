@@ -277,3 +277,73 @@ final class UpdateCheckerTests: XCTestCase {
         XCTAssertTrue(UpdateChecker.releasesPage.absoluteString.hasPrefix("https://github.com/"))
     }
 }
+
+/// Localization. A missing translation is silent at runtime — the key itself is
+/// shown — so it has to be caught here.
+final class LocalizationTests: XCTestCase {
+
+    private func strings(for language: String) throws -> [String: String] {
+        let bundle = Bundle(for: AppDelegate.self)
+        guard let path = bundle.path(forResource: language, ofType: "lproj"),
+              let lproj = Bundle(path: path),
+              let url = lproj.url(forResource: "Localizable", withExtension: "strings"),
+              let dictionary = NSDictionary(contentsOf: url) as? [String: String] else {
+            throw XCTSkip("Нет ресурсов для языка «\(language)»")
+        }
+        return dictionary
+    }
+
+    func testRussianAndEnglishHaveTheSameKeys() throws {
+        let ru = try strings(for: "ru")
+        let en = try strings(for: "en")
+        XCTAssertEqual(Set(ru.keys), Set(en.keys),
+                       "Ключи разошлись: только в ru — \(Set(ru.keys).subtracting(en.keys)), "
+                     + "только в en — \(Set(en.keys).subtracting(ru.keys))")
+        XCTAssertGreaterThan(ru.count, 50, "Слишком мало строк — похоже, файл не попал в бандл")
+    }
+
+    func testNoTranslationIsEmpty() throws {
+        for language in ["ru", "en"] {
+            for (key, value) in try strings(for: language) {
+                XCTAssertFalse(value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                               "\(language): пустой перевод для «\(key)»")
+            }
+        }
+    }
+
+    /// Every reason a word can be refused is shown to the user, so every one
+    /// needs a translation. Adding a case without a string is otherwise silent.
+    func testEveryVetoReasonIsTranslated() throws {
+        for language in ["ru", "en"] {
+            let table = try strings(for: language)
+            for reason in VetoGate.Reason.allCases {
+                XCTAssertNotNil(table["veto.\(reason.rawValue)"],
+                                "\(language): нет перевода для причины «\(reason.rawValue)»")
+            }
+        }
+    }
+
+    func testEveryHotkeyStyleIsTranslated() throws {
+        for language in ["ru", "en"] {
+            let table = try strings(for: language)
+            for style in HotkeyStyle.allCases {
+                XCTAssertNotNil(table["hotkey.\(style.rawValue)"],
+                                "\(language): нет названия для жеста «\(style.rawValue)»")
+            }
+        }
+    }
+
+    /// Format specifiers have to match between languages, or a translated string
+    /// crashes at runtime when String(format:) reads an argument that is not there.
+    func testFormatSpecifiersMatchAcrossLanguages() throws {
+        let ru = try strings(for: "ru")
+        let en = try strings(for: "en")
+        for (key, russian) in ru {
+            guard let english = en[key] else { continue }
+            let ruCount = russian.components(separatedBy: "%").count - 1
+            let enCount = english.components(separatedBy: "%").count - 1
+            XCTAssertEqual(ruCount, enCount,
+                           "«\(key)»: разное число подстановок — ru \(ruCount), en \(enCount)")
+        }
+    }
+}

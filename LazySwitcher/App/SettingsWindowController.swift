@@ -21,7 +21,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         self.app = app
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 560, height: 460),
                               styleMask: [.titled, .closable], backing: .buffered, defer: false)
-        window.title = "Настройки Lazy Switcher"
+        window.title = L("settings.window.title")
         window.center()
         super.init(window: window)
         window.delegate = self
@@ -30,6 +30,13 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
 
     required init?(coder: NSCoder) { fatalError("not used") }
 
+    /// The user may have changed Login Items in System Settings while this
+    /// window was closed, so the state is re-read every time it appears.
+    override func showWindow(_ sender: Any?) {
+        super.showWindow(sender)
+        refreshLaunchState()
+    }
+
     // MARK: - Layout
 
     private func build() {
@@ -37,11 +44,11 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         let tabs = NSTabView()
         tabs.translatesAutoresizingMaskIntoConstraints = false
 
-        tabs.addTabViewItem(tab("Основное", view: generalTab()))
-        tabs.addTabViewItem(tab("Клавиши", view: keysTab()))
-        tabs.addTabViewItem(tab("Звук", view: soundTab()))
-        tabs.addTabViewItem(tab("Приложения", view: appsTab()))
-        tabs.addTabViewItem(tab("Обновления", view: updatesTab()))
+        tabs.addTabViewItem(tab(L("settings.tab.general"), view: generalTab()))
+        tabs.addTabViewItem(tab(L("settings.tab.keys"), view: keysTab()))
+        tabs.addTabViewItem(tab(L("settings.tab.sound"), view: soundTab()))
+        tabs.addTabViewItem(tab(L("settings.tab.apps"), view: appsTab()))
+        tabs.addTabViewItem(tab(L("settings.tab.updates"), view: updatesTab()))
 
         let content = NSView()
         content.addSubview(tabs)
@@ -81,33 +88,73 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
 
     // MARK: - General
 
+    private var launchCheckbox: NSButton!
+    private var launchHint: NSTextField!
+
     private func generalTab() -> NSView {
-        let automatic = NSButton(checkboxWithTitle: "Исправлять автоматически",
+        launchCheckbox = NSButton(checkboxWithTitle: L("settings.launchAtLogin"),
+                                  target: self, action: #selector(toggleLaunchAtLogin(_:)))
+        launchHint = hint("")
+        refreshLaunchState()
+
+        let automatic = NSButton(checkboxWithTitle: L("settings.automatic"),
                                  target: self, action: #selector(toggleAutomatic(_:)))
         automatic.state = settings.automaticEnabled ? .on : .off
 
         lengthPopUp = NSPopUpButton()
-        for length in 4...8 { lengthPopUp.addItem(withTitle: "от \(length) символов") }
+        for length in 4...8 { lengthPopUp.addItem(withTitle: L("settings.minimumLength.option", length)) }
         lengthPopUp.selectItem(at: settings.minimumLength - 4)
         lengthPopUp.target = self
         lengthPopUp.action = #selector(changeLength(_:))
 
-        let lengthRow = NSStackView(views: [NSTextField(labelWithString: "Минимальная длина слова:"), lengthPopUp])
+        let lengthRow = NSStackView(views: [NSTextField(labelWithString: L("settings.minimumLength")), lengthPopUp])
         lengthRow.orientation = .horizontal
         lengthRow.spacing = 8
 
-        let switchLayout = NSButton(checkboxWithTitle: "Переключать раскладку после исправления",
+        let switchLayout = NSButton(checkboxWithTitle: L("settings.switchLayout"),
                                     target: self, action: #selector(toggleSwitchLayout(_:)))
         switchLayout.state = settings.switchLayoutAfterReplacement ? .on : .off
 
         return column([
+            launchCheckbox,
+            launchHint,
+            NSBox(),
             automatic,
             lengthRow,
-            hint("На пяти символах ложных срабатываний ноль по замерам на 25 тысячах слов; "
-               + "на четырёх — примерно одно на сто пятнадцать слов. Короткие слова всё равно "
-               + "исправляются, если следующее слово подтверждает раскладку."),
+            hint(L("settings.minimumLength.hint")),
             switchLayout,
         ])
+    }
+
+    /// Re-reads from the system rather than trusting what we last set.
+    private func refreshLaunchState() {
+        let state = LaunchAtLogin.current
+        launchCheckbox.state = state.isOn ? .on : .off
+        switch state {
+        case .enabled:
+            launchCheckbox.isEnabled = true
+            launchHint.stringValue = ""
+        case .disabled:
+            launchCheckbox.isEnabled = true
+            launchHint.stringValue = LaunchAtLogin.isInApplicationsFolder ? ""
+                : L("settings.launchAtLogin.notInApplications")
+        case .requiresApproval:
+            launchCheckbox.isEnabled = true
+            launchHint.stringValue = L("settings.launchAtLogin.needsApproval")
+        case .unavailable(let reason):
+            launchCheckbox.isEnabled = false
+            launchHint.stringValue = L("settings.launchAtLogin.unavailable", reason)
+        }
+    }
+
+    @objc private func toggleLaunchAtLogin(_ sender: NSButton) {
+        let wanted = sender.state == .on
+        if case .failure(let error) = LaunchAtLogin.set(wanted) {
+            launchHint.stringValue = L("settings.launchAtLogin.failed", error.localizedDescription)
+            NSSound.beep()
+        }
+        // Whatever we asked for, show what the system actually did.
+        refreshLaunchState()
     }
 
     @objc private func toggleAutomatic(_ sender: NSButton) {
@@ -137,7 +184,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         hotkeyPopUp.target = self
         hotkeyPopUp.action = #selector(changeHotkey(_:))
 
-        let row = NSStackView(views: [NSTextField(labelWithString: "Исправить:"), hotkeyPopUp])
+        let row = NSStackView(views: [NSTextField(labelWithString: L("settings.keys.action")), hotkeyPopUp])
         row.orientation = .horizontal
         row.spacing = 8
 
@@ -147,13 +194,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
             row,
             hotkeyHint,
             NSBox(),
-            hint("Жест делает разное, смотря по обстановке:\n"
-               + "• есть выделенный текст — переводится всё выделение целиком;\n"
-               + "• только что была замена — откат, и слово запоминается как «не менять»;\n"
-               + "• иначе — исправляется последнее слово.\n\n"
-               + "Левый и правый Shift одновременно — пауза. Этот жест не меняется вместе "
-               + "с настройкой выше: его жмут, когда что-то пошло не так, и он должен быть "
-               + "одним и тем же всегда."),
+            hint(L("settings.keys.hint")),
         ])
     }
 
@@ -169,33 +210,25 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     private var updateStatus: NSTextField!
 
     private func updatesTab() -> NSView {
-        let automatic = NSButton(checkboxWithTitle: "Проверять обновления раз в неделю",
+        let automatic = NSButton(checkboxWithTitle: L("settings.updates.automatic"),
                                  target: self, action: #selector(toggleAutoUpdates(_:)))
         automatic.state = settings.checkUpdatesAutomatically ? .on : .off
 
-        let checkNow = NSButton(title: "Проверить сейчас", target: self, action: #selector(checkNow(_:)))
-        let openPage = NSButton(title: "Открыть страницу загрузок",
+        let checkNow = NSButton(title: L("settings.updates.checkNow"), target: self, action: #selector(checkNow(_:)))
+        let openPage = NSButton(title: L("settings.updates.openPage"),
                                 target: self, action: #selector(openReleases(_:)))
         let buttons = NSStackView(views: [checkNow, openPage])
         buttons.orientation = .horizontal
         buttons.spacing = 8
 
-        updateStatus = NSTextField(labelWithString: "Версия \(UpdateChecker.currentVersion)")
+        updateStatus = NSTextField(labelWithString: L("settings.updates.version", UpdateChecker.currentVersion))
 
         return column([
             updateStatus,
             buttons,
             NSBox(),
             automatic,
-            hint("Единственное место, где приложение выходит в сеть, и по умолчанию оно "
-               + "этого не делает.\n\n"
-               + "Что происходит при проверке: один запрос к странице релизов на GitHub. "
-               + "Ничего не отправляется — ни версия, ни идентификатор, ни статистика, "
-               + "запрос вообще без содержимого. Но честно назвать и обратную сторону: "
-               + "GitHub при этом видит, что с вашего адреса спросили про эту программу "
-               + "в такое-то время. Это не ничто, поэтому решаете вы, а не мы за вас.\n\n"
-               + "Кнопка «Открыть страницу загрузок» сети не требует вовсе: она просто "
-               + "открывает браузер."),
+            hint(L("settings.updates.hint")),
         ])
     }
 
@@ -208,16 +241,16 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     }
 
     @objc private func checkNow(_ sender: Any?) {
-        updateStatus.stringValue = "Проверяем…"
+        updateStatus.stringValue = L("settings.updates.checking")
         UpdateChecker.check { [weak self] outcome in
             guard let self else { return }
             switch outcome {
             case .upToDate(let current):
-                updateStatus.stringValue = "Установлена последняя версия (\(current))"
+                updateStatus.stringValue = L("settings.updates.upToDate", current)
             case .updateAvailable(let latest, let current):
-                updateStatus.stringValue = "Есть версия \(latest), у вас \(current)"
+                updateStatus.stringValue = L("settings.updates.available", latest, current)
             case .failed(let reason):
-                updateStatus.stringValue = "Проверить не удалось: \(reason)"
+                updateStatus.stringValue = L("settings.updates.failed", reason)
             }
         }
     }
@@ -225,7 +258,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     // MARK: - Sound
 
     private func soundTab() -> NSView {
-        let enabled = NSButton(checkboxWithTitle: "Звук при исправлении",
+        let enabled = NSButton(checkboxWithTitle: L("settings.sound.enabled"),
                                target: self, action: #selector(toggleSound(_:)))
         enabled.state = settings.soundEnabled ? .on : .off
 
@@ -235,23 +268,21 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         soundPopUp.target = self
         soundPopUp.action = #selector(changeSound(_:))
 
-        let preview = NSButton(title: "Прослушать", target: self, action: #selector(previewSound(_:)))
-        let soundRow = NSStackView(views: [NSTextField(labelWithString: "Звук:"), soundPopUp, preview])
+        let preview = NSButton(title: L("settings.sound.preview"), target: self, action: #selector(previewSound(_:)))
+        let soundRow = NSStackView(views: [NSTextField(labelWithString: L("settings.sound.choose")), soundPopUp, preview])
         soundRow.orientation = .horizontal
         soundRow.spacing = 8
 
         volumeSlider = NSSlider(value: Double(settings.soundVolume), minValue: 0, maxValue: 1,
                                 target: self, action: #selector(changeVolume(_:)))
         volumeSlider.widthAnchor.constraint(equalToConstant: 200).isActive = true
-        let volumeRow = NSStackView(views: [NSTextField(labelWithString: "Громкость:"), volumeSlider])
+        let volumeRow = NSStackView(views: [NSTextField(labelWithString: L("settings.sound.volume")), volumeSlider])
         volumeRow.orientation = .horizontal
         volumeRow.spacing = 8
 
         return column([
             enabled, soundRow, volumeRow,
-            hint("Звук — самый дешёвый способ заметить, что текст изменился, не отводя глаз "
-               + "от того, что печатаете. Если мешает — выключите, иконка в строке меню "
-               + "мигает всё равно."),
+            hint(L("settings.sound.hint")),
         ])
     }
 
@@ -269,16 +300,16 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
 
     private func appsTab() -> NSView {
         unidentifiedCheckbox = NSButton(
-            checkboxWithTitle: "Работать и там, где тип поля определить не удаётся",
+            checkboxWithTitle: L("settings.apps.unidentified"),
             target: self, action: #selector(toggleUnidentified(_:)))
         unidentifiedCheckbox.state = settings.actInUnidentifiedFields ? .on : .off
 
         appList = NSTableView()
         appList.addTableColumn({
-            let c = NSTableColumn(identifier: .init("app")); c.title = "Приложение"; c.width = 260; return c
+            let c = NSTableColumn(identifier: .init("app")); c.title = L("settings.apps.column.app"); c.width = 260; return c
         }())
         appList.addTableColumn({
-            let c = NSTableColumn(identifier: .init("policy")); c.title = "Режим"; c.width = 200; return c
+            let c = NSTableColumn(identifier: .init("policy")); c.title = L("settings.apps.column.mode"); c.width = 200; return c
         }())
         appList.dataSource = self
         appList.delegate = self
@@ -295,15 +326,10 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
 
         return column([
             unidentifiedCheckbox,
-            hint("⚠️ В Chrome и Firefox нет ни одного признака поля пароля — ни в разметке "
-               + "доступности, ни через защищённый режим ввода macOS. Это проверено, не "
-               + "предположение. Пока эта галочка снята, там работает только двойной Shift, "
-               + "и вы сами решаете, куда его нажать. Если включить — автозамена сможет "
-               + "сработать и в поле пароля."),
-            NSTextField(labelWithString: "Приложения"),
+            hint(L("settings.apps.unidentified.hint")),
+            NSTextField(labelWithString: L("settings.apps.title")),
             scroll,
-            hint("Терминалы, менеджеры паролей и виртуальные машины помечены замком и "
-               + "изменению не подлежат."),
+            hint(L("settings.apps.locked.hint")),
         ])
     }
 
@@ -350,7 +376,9 @@ extension SettingsWindowController: NSTableViewDataSource, NSTableViewDelegate {
             return label
         }
         let popUp = NSPopUpButton()
-        popUp.addItems(withTitles: ["выключено", "только по хоткею", "автоматически"])
+        popUp.addItems(withTitles: [L("settings.apps.mode.disabled"),
+                                    L("settings.apps.mode.hotkeyOnly"),
+                                    L("settings.apps.mode.automatic")])
         popUp.selectItem(at: Int(entry.policy.rawValue))
         popUp.isEnabled = !entry.locked
         popUp.tag = row
