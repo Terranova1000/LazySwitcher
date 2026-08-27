@@ -69,6 +69,9 @@ enum M0Report {
             row("замен сделано", "\(delegate.replacementsMade.value)")
             row("откатов", "\(delegate.undosMade.value)")
             row("последнее действие", delegate.lastReplacementNote)
+            row("автозамен", "\(delegate.automaticReplacements.value)")
+            row("последнее решение", delegate.lastDecisionNote)
+            row("модели загружены", delegate.modelStore.loadedLanguages.joined(separator: ", "))
             let ctx = delegate.context.current
             row("приложение", delegate.context.currentCold.appName)
             row("смен приложения поймано", "\(delegate.apps.activationsSeen)")

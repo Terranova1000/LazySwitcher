@@ -200,7 +200,7 @@ def serialise_dawg(root, alphabet):
 
 # ─────────────────────────── сборка ───────────────────────────
 
-def build(path, language, out, hold_out_fraction):
+def build(path, language, out, hold_out_fraction, held_out_path):
     alphabet = ALPHABETS[language]
     index = {c: i for i, c in enumerate(alphabet)}
     size = len(alphabet)
@@ -241,9 +241,9 @@ def build(path, language, out, hold_out_fraction):
         handle.write(header + sections + alphabet_blob + blob + tri + quad)
     print(f"{language}: записано {out}", file=sys.stderr)
 
-    if evaluation:
+    if evaluation and held_out_path:
         evaluation.sort()
-        held_path = out.replace(".lsmodel", ".heldout.txt")
+        held_path = held_out_path
         with open(held_path, "w", encoding="utf-8") as handle:
             handle.write("\n".join(evaluation) + "\n")
         print(f"{language}: отложенные слова → {held_path}", file=sys.stderr)
@@ -256,8 +256,11 @@ def main():
     parser.add_argument("--out", required=True)
     parser.add_argument("--hold-out", type=float, default=0.05,
                         help="доля слов, откладываемых для замеров (по умолчанию 5%)")
+    parser.add_argument("--held-out-out", default=None,
+                        help="куда положить отложенные слова; в Resources им нельзя — "
+                             "оттуда всё уезжает в бандл приложения")
     args = parser.parse_args()
-    build(args.words, args.lang, args.out, args.hold_out)
+    build(args.words, args.lang, args.out, args.hold_out, args.held_out_out)
 
 
 if __name__ == "__main__":

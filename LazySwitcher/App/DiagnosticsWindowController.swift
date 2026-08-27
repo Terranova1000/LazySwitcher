@@ -208,6 +208,8 @@ final class DiagnosticsWindowController: NSWindowController {
         row("замен сделано", "\(delegate?.replacementsMade.value ?? 0)")
         row("откатов", "\(delegate?.undosMade.value ?? 0)")
         row("последнее действие", delegate?.lastReplacementNote ?? "—")
+        row("автозамен", "\(delegate?.automaticReplacements.value ?? 0)")
+        row("последнее решение", delegate?.lastDecisionNote ?? "—")
         if let ctx = delegate?.context.current, let cold = delegate?.context.currentCold {
             row("приложение", cold.appName.isEmpty ? "—" : cold.appName)
             row("политика", "\(ctx.policy)")

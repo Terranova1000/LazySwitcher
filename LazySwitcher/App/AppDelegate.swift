@@ -14,6 +14,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let context = ContextStore()
     let replacer = TextReplacer()
     let undo = UndoController()
+    let modelStore = ModelStore()
+
+    /// Shortest word we will convert on our own. Measured, not guessed: at five
+    /// characters false positives are 0.00%, at four they are 0.87%
+    /// (eval/report.md). Below five the user has to ask.
+    var minimumAutomaticLength = 5
 
     /// Words seen since launch, and how many we could render in both layouts.
     /// Counts only — the words themselves never leave memory.
@@ -26,6 +32,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let replacementsMade = AtomicCounter()
     let undosMade = AtomicCounter()
     private(set) var lastReplacementNote = "—"
+    let automaticReplacements = AtomicCounter()
+    private(set) var lastDecisionNote = "—"
 
     /// The word that was just committed, kept so the hotkey can reach back for
     /// it after the user has already pressed space.
@@ -108,6 +116,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         M0Report.write(tap: tap, secureInput: secureInput)
         M0TimeoutSweep.watchForTrigger(tap: tap)
         M4SelfTest.watchForTrigger(delegate: self)
+        M5SelfTest.watchForTrigger(delegate: self)
     }
 
     private func startTapOrExplain() {
@@ -172,28 +181,74 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if case .vetoed(let reason) = verdict {
                 wordsVetoed.bump()
                 lastVetoReason = reason
-            } else {
-                lastVetoReason = nil
+                return
             }
-            // Automatic replacement waits for the detector (M5). Until then the
-            // hotkey is the only thing that changes text, which also makes this
-            // the safest possible first version.
+            lastVetoReason = nil
+            considerAutomatic(word: word,
+                              typed: reading.typed,
+                              alternative: reading.alternative,
+                              sourceLanguage: reading.sourceLanguage,
+                              targetLanguage: reading.targetLanguage,
+                              target: reading.target,
+                              trailing: terminator == Self.spaceKeyCode ? " " : nil)
         }
     }
 
+    /// Everything above has said the word *may* be touched. This decides whether
+    /// it *should* be — and it is the only place in the app that acts without
+    /// being asked, so the conditions are spelled out rather than combined.
+    private func considerAutomatic(word: [KeyRecord],
+                                   typed: String,
+                                   alternative: String,
+                                   sourceLanguage: String,
+                                   targetLanguage: String,
+                                   target: TISInputSource,
+                                   trailing: String?) {
+        let hot = context.current
+        guard hot.allowsAutomaticReplacement else { return }
+        guard typed.count >= minimumAutomaticLength else {
+            lastDecisionNote = "«\(typed)»: короче \(minimumAutomaticLength) — только по хоткею"
+            return
+        }
+        guard let sourceModel = modelStore.model(for: sourceLanguage),
+              let targetModel = modelStore.model(for: targetLanguage) else {
+            lastDecisionNote = "нет модели для \(sourceLanguage)→\(targetLanguage)"
+            return
+        }
+
+        let scorer = Scorer(models: .init(source: sourceModel, target: targetModel))
+        let (decision, evidence) = scorer.decide(typed: typed, converted: alternative)
+        lastDecisionNote = String(format: "«%@» %@ Λ=%.2f", typed, "\(decision)", evidence.perCharacter)
+        guard decision == .convert else { return }
+
+        automaticReplacements.bump()
+        apply(keys: word, trailing: trailing, explicit: false, precomputed: (typed, alternative, target))
+    }
+
     /// Renders a run of keystrokes in the active layout and in the other one.
-    private func read(_ word: [KeyRecord]) -> (typed: String, alternative: String, target: TISInputSource)? {
+    private struct Reading {
+        let typed: String
+        let alternative: String
+        let target: TISInputSource
+        let sourceLanguage: String
+        let targetLanguage: String
+    }
+
+    private func read(_ word: [KeyRecord]) -> Reading? {
         guard let current = InputSourceService.currentLayout(),
-              let currentTable = keyMapper.table(for: current) else { return nil }
+              let currentTable = keyMapper.table(for: current),
+              let sourceLanguage = InputSourceService.primaryLanguage(of: current) else { return nil }
         let others = InputSourceService.enabledKeyboardLayouts().filter {
             InputSourceService.identifier(of: $0) != currentTable.layoutID
         }
         guard let other = others.first,
+              let targetLanguage = InputSourceService.primaryLanguage(of: other),
               let otherTable = keyMapper.table(for: other),
               let typed = keyMapper.render(word, with: currentTable),
               let alternative = keyMapper.render(word, with: otherTable)
         else { return nil }
-        return (typed, alternative, other)
+        return Reading(typed: typed, alternative: alternative, target: other,
+                       sourceLanguage: sourceLanguage, targetLanguage: targetLanguage)
     }
 
     // MARK: - Hotkey
@@ -306,14 +361,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private static let spaceKeyCode: UInt16 = 0x31
 
-    private func apply(keys: [KeyRecord], trailing: String?) {
-        guard let reading = read(keys) else { note("не удалось прочитать слово"); return }
+    private func apply(keys: [KeyRecord], trailing: String?,
+                       explicit: Bool = true,
+                       precomputed: (typed: String, alternative: String, target: TISInputSource)? = nil) {
+        let resolved: (typed: String, alternative: String, target: TISInputSource)
+        if let precomputed {
+            resolved = precomputed
+        } else if let reading = read(keys) {
+            resolved = (reading.typed, reading.alternative, reading.target)
+        } else {
+            note("не удалось прочитать слово"); return
+        }
+        let reading = resolved
 
         let hot = context.current
         let verdict = VetoGate.evaluate(.init(word: reading.typed,
                                               context: hot,
                                               userExclusions: [],
-                                              isExplicitRequest: true))
+                                              isExplicitRequest: explicit))
         if case .vetoed(let reason) = verdict {
             wordsVetoed.bump()
             lastVetoReason = reason
@@ -366,6 +431,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applyForSelfTest(keys: [KeyRecord]) {
         apply(keys: keys, trailing: nil)
     }
+
+    /// Reachable only from the hotkey path, which is where `read` is called.
 
     /// Re-reads the focused element and republishes context. The self-test needs
     /// it because it brings an app forward that may already have been frontmost,
