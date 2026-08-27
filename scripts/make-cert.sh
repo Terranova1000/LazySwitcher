@@ -51,10 +51,16 @@ security import dev.p12 -k "$KEYCHAIN" -P "$PASS" \
   -T /usr/bin/codesign -T /usr/bin/security >/dev/null
 echo "· импортирован в связку ключей"
 
-# Доверие на уровне пользователя — без sudo. Именно оно избавляет codesign
-# от errSecInternalComponent при самоподписанном корне.
-security add-trusted-cert -r trustRoot -p codeSign -k "$KEYCHAIN" dev.crt
-echo "· помечен доверенным для подписи кода"
+# Пометка «доверенный» НЕ обязательна: проверено, что codesign подписывает
+# недоверенным самоподписанным сертификатом, и DR всё равно ссылается на хеш
+# сертификата (docs/00-DECISIONS.md, Н2). Команда ниже требует пароль в
+# графическом диалоге, поэтому она под флагом и по умолчанию пропускается.
+if [ "${LS_TRUST_CERT:-0}" = "1" ]; then
+  security add-trusted-cert -r trustRoot -p codeSign -k "$KEYCHAIN" dev.crt
+  echo "· помечен доверенным для подписи кода"
+else
+  echo "· доверие не выставляем (не требуется; LS_TRUST_CERT=1 чтобы выставить)"
+fi
 
 # Разрешаем codesign брать ключ без диалога о доступе к связке
 security set-key-partition-list -S apple-tool:,apple:,codesign: \
@@ -62,6 +68,8 @@ security set-key-partition-list -S apple-tool:,apple:,codesign: \
   echo "  (не удалось выставить partition list — codesign может спросить пароль)"
 
 echo
+# find-identity помечает недоверенный корень как CSSMERR_TP_NOT_TRUSTED —
+# это ожидаемо и подписи не мешает, поэтому проверяем факт наличия, а не «valid».
 security find-identity -v -p codesigning | grep "$NAME" || {
   echo "Сертификат импортирован, но codesign его не видит. Проверьте связку ключей." >&2
   exit 1

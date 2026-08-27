@@ -7,8 +7,12 @@
   Системный `/usr/bin/python3` на macOS 15 — это **3.9**, его не хватает, и ставить
   в него пакеты нельзя. Заводим отдельное окружение:
   `brew install python@3.12 && python3.12 -m venv Tools/.venv && Tools/.venv/bin/pip install spylls`
-- **`brew install openssl@3`** — системный `/usr/bin/openssl` на macOS это LibreSSL,
-  а в нём нет опции `pkcs12 -legacy`, без которой Связка ключей не примет сертификат
+- OpenSSL — **не обязателен**. Изначально считалось, что нужен `brew install
+  openssl@3`, потому что у системного LibreSSL нет `pkcs12 -legacy`. Проверено:
+  флаг нужен только самому OpenSSL 3 (он по умолчанию шифрует контейнер
+  AES-256/PBKDF2, чего Связка ключей не принимает), а LibreSSL 3.3.6 и так пишет
+  старый формат. `scripts/make-cert.sh` работает на системном openssl.
+  См. `00-DECISIONS.md`, Н3
 - `create-dmg` для сборки образа (`brew install create-dmg`), либо `hdiutil` вручную
 
 ---
