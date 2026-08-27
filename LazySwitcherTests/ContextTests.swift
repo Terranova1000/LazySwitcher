@@ -1,0 +1,132 @@
+import XCTest
+@testable import Lazy_Switcher
+
+final class HotContextTests: XCTestCase {
+
+    /// The packing is what lets the key thread read context without a lock.
+    /// If it ever loses a field the failure is silent and the consequences are
+    /// the bad kind — a stale "not a password field", for instance.
+    func testEveryFieldSurvivesTheRoundTrip() {
+        let original = HotContext(isSecureInput: true, policy: .hotkeyOnly, fieldRole: .terminal,
+                                  sourceLayoutSlot: 3, targetLayoutSlot: 7, generation: 0xDEAD_BEEF)
+        XCTAssertEqual(HotContext(packed: original.packed), original)
+    }
+
+    func testAllCombinationsOfPolicyAndRoleRoundTrip() {
+        for policy in [AppPolicy.disabled, .hotkeyOnly, .automatic] {
+            for role in [FieldRole.text, .secure, .code, .terminal, .unknown] {
+                for secure in [true, false] {
+                    let c = HotContext(isSecureInput: secure, policy: policy, fieldRole: role)
+                    let back = HotContext(packed: c.packed)
+                    XCTAssertEqual(back.policy, policy)
+                    XCTAssertEqual(back.fieldRole, role)
+                    XCTAssertEqual(back.isSecureInput, secure)
+                }
+            }
+        }
+    }
+
+    func testDefaultContextForbidsEverything() {
+        let fresh = HotContext()
+        XCTAssertFalse(fresh.allowsAnyAction, "Пустой контекст обязан запрещать, а не разрешать")
+        XCTAssertFalse(fresh.allowsAutomaticReplacement)
+    }
+
+    func testSecureInputOverridesAPermissivePolicy() {
+        let c = HotContext(isSecureInput: true, policy: .automatic, fieldRole: .text)
+        XCTAssertFalse(c.allowsAnyAction)
+    }
+
+    func testHotkeyOnlyAllowsActionButNotAutomaticReplacement() {
+        let c = HotContext(isSecureInput: false, policy: .hotkeyOnly, fieldRole: .text)
+        XCTAssertTrue(c.allowsAnyAction)
+        XCTAssertFalse(c.allowsAutomaticReplacement)
+    }
+}
+
+final class ContextStoreTests: XCTestCase {
+
+    func testPublishBumpsGenerationAndKeepsHalvesInStep() {
+        let store = ContextStore()
+        store.publish(hot: HotContext(isSecureInput: false, policy: .automatic, fieldRole: .text),
+                      cold: ColdContext(bundleID: "com.example.app", appName: "Example"))
+        XCTAssertEqual(store.current.generation, store.currentCold.generation)
+        XCTAssertEqual(store.currentCold.bundleID, "com.example.app")
+
+        let firstGeneration = store.current.generation
+        store.publish(hot: HotContext(), cold: ColdContext())
+        XCTAssertEqual(store.current.generation, firstGeneration + 1)
+    }
+
+    func testSecureInputCanBeFlippedWithoutRepublishingEverything() {
+        let store = ContextStore()
+        store.publish(hot: HotContext(isSecureInput: false, policy: .automatic, fieldRole: .text),
+                      cold: ColdContext(bundleID: "com.example.app", appName: "Example"))
+        store.setSecureInput(true)
+        XCTAssertTrue(store.current.isSecureInput)
+        XCTAssertEqual(store.current.policy, .automatic, "Остальные поля не должны потеряться")
+        XCTAssertFalse(store.current.allowsAnyAction)
+    }
+}
+
+final class AppPolicyStoreTests: XCTestCase {
+
+    func testTerminalsAndPasswordManagersAreLocked() {
+        let store = AppPolicyStore()
+        for id in ["com.apple.Terminal", "com.googlecode.iterm2",
+                   "com.1password.1password", "org.keepassxc.keepassxc",
+                   "com.apple.loginwindow", "com.parallels.desktop.console"] {
+            XCTAssertEqual(store.policy(for: id), .disabled, "\(id) обязан быть выключен")
+            XCTAssertTrue(store.isLocked(id))
+        }
+    }
+
+    /// A locked app must not be openable by a stray setting — this is the guard
+    /// standing between us and a mangled `rm -rf`.
+    func testLockedAppsRefuseOverrides() {
+        let store = AppPolicyStore()
+        XCTAssertFalse(store.setPolicy(.automatic, for: "com.apple.Terminal"))
+        XCTAssertEqual(store.policy(for: "com.apple.Terminal"), .disabled)
+    }
+
+    func testEditorsAreOffByDefaultButMayBeEnabled() {
+        let store = AppPolicyStore()
+        XCTAssertEqual(store.policy(for: "com.microsoft.VSCode"), .disabled)
+        XCTAssertTrue(store.setPolicy(.hotkeyOnly, for: "com.microsoft.VSCode"))
+        XCTAssertEqual(store.policy(for: "com.microsoft.VSCode"), .hotkeyOnly)
+    }
+
+    func testOrdinaryAppsAreAllowed() {
+        let store = AppPolicyStore()
+        XCTAssertEqual(store.policy(for: "com.apple.Notes"), .automatic)
+        XCTAssertEqual(store.policy(for: "ru.keepcoder.Telegram"), .automatic)
+    }
+}
+
+final class FocusClassificationTests: XCTestCase {
+
+    /// There is no `AXSecureTextField` *role* — a password field is role
+    /// AXTextField plus that subrole. Both WebKit and Chromium report it this
+    /// way, which is the only reason browser passwords are detectable.
+    func testSecureSubroleWins() {
+        XCTAssertEqual(FocusMonitor.classify(role: "AXTextField", subrole: "AXSecureTextField"), .secure)
+    }
+
+    func testOrdinaryTextRoles() {
+        XCTAssertEqual(FocusMonitor.classify(role: "AXTextField", subrole: nil), .text)
+        XCTAssertEqual(FocusMonitor.classify(role: "AXTextArea", subrole: nil), .text)
+    }
+
+    /// Chromium hands back a coarse container until its accessibility tree wakes
+    /// up. Treating that as ordinary text is how a password eventually leaks.
+    func testChromiumPlaceholdersAreUnknownNotText() {
+        for role in ["AXWebArea", "AXGroup", "AXUnknown", "AXScrollArea"] {
+            XCTAssertEqual(FocusMonitor.classify(role: role, subrole: nil), .unknown,
+                           "\(role) — это «не знаю», а не «обычный текст»")
+        }
+    }
+
+    func testNoRoleAtAllIsUnknown() {
+        XCTAssertEqual(FocusMonitor.classify(role: nil, subrole: nil), .unknown)
+    }
+}

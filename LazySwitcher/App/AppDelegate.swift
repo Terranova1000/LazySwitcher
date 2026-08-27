@@ -7,11 +7,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let mouse = MouseMonitor()
     let inputSources = InputSourceService()
     let keyMapper = KeyMapper()
+    let apps = AppMonitor()
+    let focus = FocusMonitor()
+    let policies = AppPolicyStore()
+    let context = ContextStore()
 
     /// Words seen since launch, and how many we could render in both layouts.
     /// Counts only — the words themselves never leave memory.
     let wordsCommitted = AtomicCounter()
     let wordsConvertible = AtomicCounter()
+    let wordsVetoed = AtomicCounter()
+    private(set) var lastVetoReason: VetoGate.Reason?
     /// Last word in both readings, for the diagnostics window on screen only.
     private(set) var lastPair: (typed: String, alternative: String)?
     private var menuBar: MenuBarController!
@@ -37,9 +43,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // Mirror it where the tap callback can read it without calling into
             // Carbon, and drop anything we are holding the moment it turns on.
             tap.secureInputMirror.value = enabled ? 1 : 0
+            context.setSecureInput(enabled)
             if enabled { tap.wipeVolatileState() }
             menuBar.update(secureInput: enabled)
         }
+
+        // App switch → new process to observe, and a caret that is now elsewhere.
+        apps.onAppChanged = { [weak self] pid, bundleID, name in
+            guard let self else { return }
+            tap.invalidateBuffer(reason: .appChanged)
+            focus.observe(pid: pid, bundleID: bundleID)
+            publishContext(bundleID: bundleID, appName: name)
+        }
+        focus.onFocusChanged = { [weak self] _ in
+            guard let self else { return }
+            tap.invalidateBuffer(reason: .focusChanged)
+            publishContext(bundleID: apps.bundleID, appName: apps.appName)
+        }
+        apps.start()
         secureInput.start()
         tap.secureInputMirror.value = secureInput.isEnabled ? 1 : 0
 
@@ -100,10 +121,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         permissionTimer = t
     }
 
-    /// M1+M2 end to end: a word ended, render it in the active layout and in the
-    /// other one. Deciding which is right is M5; this only proves the chain runs.
+    private func publishContext(bundleID: String, appName: String) {
+        var hot = HotContext()
+        hot.isSecureInput = secureInput.isEnabled
+        hot.policy = policies.policy(for: bundleID)
+        hot.fieldRole = focus.fieldRole
+        context.publish(hot: hot, cold: ColdContext(bundleID: bundleID, appName: appName))
+    }
+
+    /// M1–M3 end to end: a word ended, check it is allowed to be touched at all,
+    /// then render it in the active layout and in the other one. Deciding which
+    /// reading is right is M5; applying the change is M4.
     private func evaluate(_ word: [KeyRecord]) {
         wordsCommitted.bump()
+
         guard let current = InputSourceService.currentLayout(),
               let currentTable = keyMapper.table(for: current) else { return }
 
@@ -117,8 +148,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         else { return }
 
         wordsConvertible.bump()
+
+        // The veto runs on the rendered word, before any scoring — it is cheap
+        // and it is the layer that keeps us out of trouble.
+        let verdict = VetoGate.evaluate(.init(word: typed, context: context.current))
         DispatchQueue.main.async { [weak self] in
-            self?.lastPair = (typed: typed, alternative: alternative)
+            guard let self else { return }
+            lastPair = (typed: typed, alternative: alternative)
+            if case .vetoed(let reason) = verdict {
+                wordsVetoed.bump()
+                lastVetoReason = reason
+            } else {
+                lastVetoReason = nil
+            }
         }
     }
 

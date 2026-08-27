@@ -174,6 +174,16 @@ final class DiagnosticsWindowController: NSWindowController {
         }
         row("слов набрано", "\(delegate?.wordsCommitted.value ?? 0)")
         row("из них читаемы в обеих", "\(delegate?.wordsConvertible.value ?? 0)")
+        row("запрещено к замене", "\(delegate?.wordsVetoed.value ?? 0)")
+        if let reason = delegate?.lastVetoReason {
+            row("последний запрет", reason.rawValue)
+        }
+        if let ctx = delegate?.context.current, let cold = delegate?.context.currentCold {
+            row("приложение", cold.appName.isEmpty ? "—" : cold.appName)
+            row("политика", "\(ctx.policy)")
+            row("поле в фокусе", "\(ctx.fieldRole)")
+            row("замена разрешена", ctx.allowsAutomaticReplacement ? "да" : "нет")
+        }
         if let pair = delegate?.lastPair {
             // On screen only, in memory only. Never written anywhere.
             row("последнее слово", "«\(pair.typed)»  ↔  «\(pair.alternative)»")

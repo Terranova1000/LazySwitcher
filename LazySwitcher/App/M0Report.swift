@@ -65,6 +65,30 @@ enum M0Report {
         if let delegate = NSApp.delegate as? AppDelegate {
             row("слов набрано", "\(delegate.wordsCommitted.value)")
             row("из них читаемы в обеих", "\(delegate.wordsConvertible.value)")
+            row("запрещено к замене", "\(delegate.wordsVetoed.value)")
+            let ctx = delegate.context.current
+            row("приложение", delegate.context.currentCold.appName)
+            row("смен приложения поймано", "\(delegate.apps.activationsSeen)")
+            row("политика", "\(ctx.policy)")
+            row("поле в фокусе", "\(ctx.fieldRole)")
+            row("AX role / subrole", "\(delegate.focus.lastRole) / \(delegate.focus.lastSubrole)")
+            row("AX ошибка", delegate.focus.lastError)
+            row("побудок дерева", "\(delegate.focus.wakeSuccesses) удачных из \(delegate.focus.wakeAttempts)")
+            row("AXManualAccessibility", delegate.focus.manualAccessibilityResult)
+            row("замена разрешена", flag(ctx.allowsAutomaticReplacement))
+        }
+
+        lines.append("")
+        lines.append("## что видели в приложениях (последние наблюдения)")
+        if let delegate = NSApp.delegate as? AppDelegate {
+            // Swift padding, not String(format:%-18s): the C path takes a UTF-8
+            // pointer and pads by bytes, so a two-byte dash comes out as mojibake.
+            for entry in delegate.focus.history.suffix(20) {
+                let app = entry.app.padding(toLength: 18, withPad: " ", startingAt: 0)
+                let role = entry.role.padding(toLength: 16, withPad: " ", startingAt: 0)
+                let sub = entry.subrole.padding(toLength: 20, withPad: " ", startingAt: 0)
+                lines.append("  \(app) \(role) \(sub) → \(entry.verdict)")
+            }
         }
 
         lines.append("")
