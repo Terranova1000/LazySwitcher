@@ -143,7 +143,9 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
             launchHint.stringValue = L("settings.launchAtLogin.needsApproval")
         case .unavailable(let reason):
             launchCheckbox.isEnabled = false
-            launchHint.stringValue = L("settings.launchAtLogin.unavailable", reason)
+            let text = reason == .notFound ? L("launchAtLogin.reason.notFound")
+                                           : L("launchAtLogin.reason.unknown")
+            launchHint.stringValue = L("settings.launchAtLogin.unavailable", text)
         }
     }
 

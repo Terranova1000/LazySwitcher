@@ -267,3 +267,51 @@ final class OpaqueBrowserPolicyTests: XCTestCase {
         XCTAssertEqual(store.policy(for: "com.google.Chrome"), .disabled)
     }
 }
+
+/// The order of checks inside `VetoGate`, which is itself a safety property.
+///
+/// Length used to be tested before shape, and that was a hole: a word too short
+/// to convert on its own is not thereby safe, because the chain can still carry
+/// it along on a neighbour's confidence. Returning `.tooShort` early meant short
+/// words never met the rules that exist to stop exactly that.
+final class VetoOrderingTests: XCTestCase {
+
+    private func verdict(_ word: String, explicit: Bool = false) -> VetoGate.Verdict {
+        VetoGate.evaluate(.init(word: word,
+                                context: HotContext(isSecureInput: false, policy: .automatic,
+                                                    fieldRole: .text),
+                                isExplicitRequest: explicit))
+    }
+
+    /// Each of these is short enough to be refused for length, and each is also
+    /// the wrong shape. The shape is the reason that matters — length only says
+    /// "not on my own", and the chain can override that.
+    func testShortWordsAreStillJudgedOnShape() {
+        XCTAssertEqual(verdict("C:"), .vetoed(.looksLikePath), "«C:» — это диск, а не короткое слово")
+        XCTAssertEqual(verdict("a1"), .vetoed(.hasDigits))
+        XCTAssertEqual(verdict("a@b"), .vetoed(.looksLikeAddress))
+        XCTAssertEqual(verdict("a_b"), .vetoed(.identifierShape))
+        XCTAssertEqual(verdict("API"), .vetoed(.shortAllCaps))
+    }
+
+    /// And a short word that is otherwise fine is still refused — for length.
+    func testShortWordOfGoodShapeIsRefusedForLength() {
+        XCTAssertEqual(verdict("yt"), .vetoed(.tooShort))
+        XCTAssertEqual(verdict("ghb"), .vetoed(.tooShort))
+    }
+
+    /// The property that actually protects the user: whatever the reason, these
+    /// never come back `.allowed`, on either path.
+    func testNothingMisshapenIsEverAllowed() {
+        for word in ["C:", "a1", "a@b", "a_b", "API", "~/x", "/x", "1.2.3.4",
+                     "ab-cd-ef", "$x", "MySQL", "ABCdefghijk!mn"] {
+            XCTAssertNotEqual(verdict(word), .allowed, "«\(word)» автоматически")
+            XCTAssertNotEqual(verdict(word, explicit: true), .allowed, "«\(word)» по хоткею")
+        }
+    }
+
+    func testTooLongIsCheckedBeforeAnythingElse() {
+        // 30 обычных букв: форма нормальная, длина — нет.
+        XCTAssertEqual(verdict(String(repeating: "a", count: 30)), .vetoed(.tooLong))
+    }
+}

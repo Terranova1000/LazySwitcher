@@ -20,7 +20,12 @@ enum LaunchAtLogin {
         /// Registered, but macOS wants the user to confirm in System Settings.
         /// Has to be shown as its own thing: it looks like failure and is not.
         case requiresApproval
-        case unavailable(String)
+        case unavailable(Reason)
+
+        /// Why, as a value rather than a sentence. A русская фраза inside the
+        /// type gets interpolated into an English screen and only shows up when
+        /// somebody runs the app in English — which is to say, after release.
+        enum Reason { case notFound, unknown }
 
         var isOn: Bool {
             switch self {
@@ -35,8 +40,8 @@ enum LaunchAtLogin {
         case .enabled: return .enabled
         case .requiresApproval: return .requiresApproval
         case .notRegistered: return .disabled
-        case .notFound: return .unavailable("приложение не найдено системой")
-        @unknown default: return .unavailable("неизвестное состояние")
+        case .notFound: return .unavailable(.notFound)
+        @unknown default: return .unavailable(.unknown)
         }
     }
 

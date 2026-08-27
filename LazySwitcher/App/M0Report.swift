@@ -17,10 +17,16 @@ import AppKit
 /// can be read back without a human describing the screen. Deleted at M1.
 ///
 /// The one rule that matters here: this writes **aggregates only**. Counters,
-/// permission booleans, signature facts. No key codes, no flags, no characters,
-/// nothing derived from what was typed. CLAUDE.md rule 1 has no debug exception,
-/// and a diagnostics dump is precisely where that rule gets broken by accident,
-/// so the omission is deliberate and load-bearing rather than an oversight.
+/// permission booleans, signature facts, lengths and verdicts. No key codes, no
+/// flags, no characters, nothing from which a word could be reconstructed.
+///
+/// CLAUDE.md rule 1 has no debug exception, and this is exactly where it gets
+/// broken by accident — it did, once. The notes this file prints used to
+/// interpolate the word itself, so the report became a rolling record of what
+/// was being typed, while the line at the bottom of it claimed otherwise. A
+/// comment asserting compliance is worse than no comment: it stops the next
+/// person from checking. The notes now carry lengths and verdicts only, and the
+/// claim below is true again.
 enum M0Report {
 
     static var url: URL {

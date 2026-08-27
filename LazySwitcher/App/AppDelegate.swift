@@ -71,6 +71,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private(set) var lastPair: (typed: String, alternative: String)?
     let replacementsMade = AtomicCounter()
     let undosMade = AtomicCounter()
+    /// Human-readable trace of the last action and the last decision.
+    ///
+    /// **These must never contain typed text.** They are shown on screen *and*
+    /// written to the debug report on disk, and rule 1 grants no debug
+    /// exception: "ни в файл, ни в UserDefaults, ни в крэш-репорт, ни в os_log
+    /// (даже в debug)". They used to interpolate the word itself, which made the
+    /// report a rolling record of what the user was typing — while a comment in
+    /// that very file claimed the opposite.
+    ///
+    /// What goes here instead: lengths, verdicts, Λ, strategy names. Enough to
+    /// debug a decision, nothing to reconstruct a sentence from.
     private(set) var lastReplacementNote = "—"
     let automaticReplacements = AtomicCounter()
     private(set) var lastDecisionNote = "—"
@@ -289,6 +300,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// reading is right is M5; applying the change is M4.
     private func evaluate(_ word: [KeyRecord], terminator: UInt16) {
         wordsCommitted.bump()
+        // Captured here, before any hop. Everything downstream compares against it.
+        let generation = tap.inputGeneration.value
         guard let reading = read(word) else { return }
         wordsConvertible.bump()
 
@@ -328,7 +341,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // is the same problem. Escape may have closed the field entirely.
             guard terminator == Self.spaceKeyCode else {
                 chain.clear()
-                lastDecisionNote = "«\(reading.typed)»: слово закрыто не пробелом — не трогаем"
+                lastDecisionNote = "\(reading.typed.count) симв.: закрыто не пробелом — не трогаем"
                 return
             }
             considerAutomatic(word: word,
@@ -337,7 +350,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                               sourceLanguage: reading.sourceLanguage,
                               targetLanguage: reading.targetLanguage,
                               target: reading.target,
-                              trailing: " ")
+                              trailing: " ",
+                              generation: generation)
         }
     }
 
@@ -350,8 +364,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                                    sourceLanguage: String,
                                    targetLanguage: String,
                                    target: TISInputSource,
-                                   trailing: String?) {
+                                   trailing: String?,
+                                   generation: UInt64) {
         guard !isPaused else { return }
+        // A word the user has already rejected is not offered again. This lived
+        // only on the explicit path before, so undoing a correction stopped it
+        // once and then it came straight back on the next word.
+        guard !feedback.isRejected(typed) else {
+            lastDecisionNote = "\(typed.count) симв.: в списке «не менять»"
+            return
+        }
         let hot = context.current
         guard let sourceModel = modelStore.model(for: sourceLanguage),
               let targetModel = modelStore.model(for: targetLanguage) else {
@@ -380,11 +402,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             && decision != .keep
 
         guard longEnough || inherits else {
-            lastDecisionNote = "«\(typed)»: короче \(minimumAutomaticLength), ждём соседа"
+            lastDecisionNote = "\(typed.count) симв.: короче \(minimumAutomaticLength), ждём соседа"
             return
         }
         guard decision == .convert || inherits else {
-            lastDecisionNote = String(format: "«%@» %@ Λ=%.2f", typed, "\(decision)", evidence.perCharacter)
+            lastDecisionNote = String(format: "%d симв.: %@ Λ=%.2f", typed.count, "\(decision)", evidence.perCharacter)
             return
         }
 
@@ -398,12 +420,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         lastDecisionNote = rescued.isEmpty
-            ? String(format: "«%@» convert Λ=%.2f%@", typed, evidence.perCharacter, inherits ? " (по соседу)" : "")
-            : String(format: "«%@» convert, с ним %d слева", typed, rescued.count)
+            ? String(format: "%d симв.: convert Λ=%.2f%@", typed.count, evidence.perCharacter,
+                     inherits ? " (по соседу)" : "")
+            : String(format: "%d симв.: convert, с ним %d слева", typed.count, rescued.count)
 
         automaticReplacements.bump()
         if !rescued.isEmpty { chainRescues.bump() }
-        applyRun(from: from, to: to, target: target, marking: rescued.count + 1)
+        applyRun(from: from, to: to, target: target,
+                 marking: rescued.count + 1, generation: generation)
     }
 
     /// Replaces a run of already-typed text in one operation.
@@ -412,18 +436,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// each have to be correct about where the caret is after the previous one,
     /// and the whole point of the chain is that these words sit next to each
     /// other, so the run is a single known string.
-    private func applyRun(from: String, to: String, target: TISInputSource, marking count: Int) {
+    private func applyRun(from: String, to: String, target: TISInputSource,
+                          marking count: Int, generation: UInt64) {
         let bundleID = context.currentCold.bundleID
         guard !isReplacing else { note("пропущено: предыдущая замена ещё идёт"); return }
+        // Anything typed since the decision moved the caret, and the decision was
+        // about characters that are no longer in front of it.
+        guard tap.inputGeneration.value == generation else {
+            note("пропущено: текст изменился, пока думали")
+            return
+        }
         isReplacing = true
         applyQueue.async { [weak self] in
             guard let self else { return }
+            guard tap.inputGeneration.value == generation else {
+                DispatchQueue.main.async { self.isReplacing = false; self.note("пропущено: текст изменился") }
+                return
+            }
             let outcome = replacer.replace(original: from, with: to, in: bundleID)
             DispatchQueue.main.async {
                 self.isReplacing = false
                 guard outcome.succeeded else { self.note("замена не удалась"); return }
                 self.replacementsMade.bump()
-                self.note("\(outcome.strategy.rawValue): «\(from)» → «\(to)»")
+                self.note("\(outcome.strategy.rawValue): \(from.count) → \(to.count) симв.")
                 self.chain.markConverted(count: count)
                 self.undo.arm(original: from, replacement: to, bundleID: bundleID)
                 if Settings.shared.switchLayoutAfterReplacement { self.inputSources.select(target) }
@@ -580,7 +615,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self.isReplacing = false
                 guard ok else { self.note("не удалось заменить выделение"); return }
                 self.replacementsMade.bump()
-                self.note("выделение (\(selection.text.count) симв.) → «\(converted.prefix(24))…»")
+                self.note("выделение: \(selection.text.count) симв.")
                 self.tap.clearBufferAfterReplacement()
                 self.undo.arm(original: selection.text, replacement: converted, bundleID: bundleID)
                 if Settings.shared.switchLayoutAfterReplacement { self.inputSources.select(other) }
@@ -618,7 +653,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if case .vetoed(let reason) = verdict {
             wordsVetoed.bump()
             lastVetoReason = reason
-            note("запрещено: \(reason.localizedDescription)")
+            note("запрещено: \(reason.rawValue)")
             NSSound.beep()
             return
         }
@@ -639,7 +674,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self.isReplacing = false
                 guard outcome.succeeded else { self.note("замена не удалась"); return }
                 self.replacementsMade.bump()
-                self.note("\(outcome.strategy.rawValue): «\(reading.typed)» → «\(reading.alternative)»")
+                self.note("\(outcome.strategy.rawValue): \(reading.typed.count) симв.")
                 self.tap.clearBufferAfterReplacement()
                 self.undo.arm(original: from, replacement: to, bundleID: bundleID)
                 // Switch the layout too, or the next word comes out wrong again
@@ -667,8 +702,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 let word = pending.replacement.trimmingCharacters(in: .whitespacesAndNewlines)
                 let becamePermanent = self.feedback.recordUndo(of: word)
                 self.note(becamePermanent
-                          ? "откат: «\(pending.original)». Слово больше не заменяется никогда"
-                          : "откат: вернули «\(pending.original)»")
+                          ? "откат \(pending.original.count) симв.; слово занесено в «не менять» навсегда"
+                          : "откат \(pending.original.count) симв.")
                 self.tap.clearBufferAfterReplacement()
                 NSSound(named: "Pop")?.play()
             }

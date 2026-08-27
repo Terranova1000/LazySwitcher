@@ -9,7 +9,17 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-DEST="/Applications/Lazy Switcher.app"
+# Отдельный путь, а не боевой.
+#
+# Debug-сборка несёт get-task-allow (его добавляет Xcode сам, в Debug.entitlements
+# его нет) и послабление library validation. Вместе с выданным Accessibility это
+# готовый обход TCC: любой процесс от имени пользователя делает task_for_pid и
+# подгружает в приложение неподписанную библиотеку, наследуя права на чтение и
+# синтез клавиатурных событий, которых сам никогда бы не получил.
+#
+# Bundle ID у сборок и так разные, поэтому разрешения ведутся раздельно и ничего
+# не теряется. А по боевому пути должен лежать боевой бандл.
+DEST="/Applications/Lazy Switcher (debug).app"
 
 xcodebuild -project LazySwitcher.xcodeproj -scheme LazySwitcher \
   -configuration Debug -derivedDataPath build build \
@@ -18,7 +28,7 @@ xcodebuild -project LazySwitcher.xcodeproj -scheme LazySwitcher \
 SRC="build/Build/Products/Debug/Lazy Switcher.app"
 
 # Выгружаем работающую копию, иначе перезапись повредит подпись живого процесса
-pkill -f "/Applications/Lazy Switcher.app/Contents/MacOS/Lazy Switcher" 2>/dev/null || true
+pkill -f "/Applications/Lazy Switcher (debug).app/Contents/MacOS/Lazy Switcher" 2>/dev/null || true
 sleep 0.5
 
 # Замена целиком, а не поверх: частично записанный бандл ломает подпись,

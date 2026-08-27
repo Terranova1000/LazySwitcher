@@ -85,18 +85,21 @@ enum VetoGate {
 
         if word.isEmpty { return .vetoed(.tooShort) }
 
-        // 4. Length. Relaxed when the user asked, but never below two characters:
-        //    every single-character word collides with a real word in the other
-        //    language, so one on its own is never decidable.
         let length = word.count
-        if input.isExplicitRequest {
-            if length < 2 { return .vetoed(.tooShort) }
-        } else if length < input.minimumLength {
-            return .vetoed(.tooShort)
-        }
 
-        // 5. Base64, hashes, tokens.
+        // Base64, hashes, tokens.
         if length > 24 { return .vetoed(.tooLong) }
+
+        // Note the order: the shape rules below run **before** the minimum
+        // length check, not after.
+        //
+        // It used to be the other way round, and that was a hole. A word too
+        // short to convert on its own is not thereby safe — the chain can still
+        // carry it along on a neighbour's confidence — so returning `.tooShort`
+        // early meant `«ip»`, `«a1»` or `«C:»` never met the rules that exist to
+        // stop exactly that. Length is about whether we may act alone; shape is
+        // about whether the word may be touched at all, and that question has to
+        // be answered first.
 
         // 6. The user's own list wins over everything below.
         if input.userExclusions.contains(word.lowercased()) { return .vetoed(.userExclusion) }
@@ -116,6 +119,15 @@ enum VetoGate {
         if isShortAllCaps(word) { return .vetoed(.shortAllCaps) }
 
         if !containsAnyLetter(word) { return .vetoed(.notLetters) }
+
+        // Length last. Relaxed when the user asked, but never below two
+        // characters: every single-character word collides with a real word in
+        // the other language, so one on its own is never decidable.
+        if input.isExplicitRequest {
+            if length < 2 { return .vetoed(.tooShort) }
+        } else if length < input.minimumLength {
+            return .vetoed(.tooShort)
+        }
 
         return .allowed
     }

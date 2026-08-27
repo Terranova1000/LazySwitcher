@@ -113,6 +113,8 @@ final class FocusMonitor {
         observer = nil
         observedElement = nil
         observedPID = 0
+        // Bumping the generation orphans any ladder still in flight.
+        wakeGeneration &+= 1
         isWaking = false
         fieldRole = .unknown
     }
@@ -183,19 +185,34 @@ final class FocusMonitor {
     /// be guessing about is whether this is a password field.
     /// One ladder at a time, and never more rungs than this.
     ///
+    /// Two attempts were needed here, and both failures are worth keeping.
+    ///
     /// The first version cleared its own guard immediately before re-querying,
     /// and since the re-query also ends in `unknown` it started a fresh ladder
-    /// every time — 13 938 attempts in a few minutes, each one an XPC round trip
+    /// every time — 13 938 attempts in a few minutes, each an XPC round trip
     /// into another app. Exactly the "eats CPU and heats the laptop" failure the
-    /// project treats as disqualifying. Hence a flag that spans the whole ladder
-    /// and is cleared in one place.
+    /// project treats as disqualifying.
+    ///
+    /// The second version used a flag spanning the whole ladder, which looked
+    /// right and was not: `observe` calls `stop`, which cleared the flag, then
+    /// starts a fresh ladder — while the previous ladder's `asyncAfter` blocks
+    /// are still queued. Those blocks wake up, see the flag set by the *new*
+    /// ladder, conclude they are it, and carry on. Two ladders; on rapid app
+    /// switching, more.
+    ///
+    /// A generation number settles it: each ladder carries the number it was
+    /// born with and stops the moment a newer one exists. Same device as the
+    /// context generation, for the same reason — a boolean cannot tell "someone
+    /// is running" from "*I* am running".
+    private var wakeGeneration = 0
     private var isWaking = false
     private static let wakeDelays: [TimeInterval] = [0.15, 0.4, 1.0]
 
     private func scheduleWakeRetry(bundleID: String) {
         guard !isWaking else { return }
+        wakeGeneration &+= 1
         isWaking = true
-        retryWake(bundleID: bundleID, step: 0)
+        retryWake(bundleID: bundleID, step: 0, generation: wakeGeneration)
     }
 
     /// Asking for the window list is a heavier request than asking for focus,
@@ -210,10 +227,15 @@ final class FocusMonitor {
 
     private(set) var nudgeResult = "—"
 
-    private func retryWake(bundleID: String, step: Int) {
-        guard step < Self.wakeDelays.count else { isWaking = false; return }
+    private func retryWake(bundleID: String, step: Int, generation: Int) {
+        guard step < Self.wakeDelays.count else {
+            if generation == wakeGeneration { isWaking = false }
+            return
+        }
         DispatchQueue.main.asyncAfter(deadline: .now() + Self.wakeDelays[step]) { [weak self] in
             guard let self else { return }
+            // Someone started a newer ladder, or `stop` orphaned this one.
+            guard generation == wakeGeneration else { return }
             guard observedElement != nil else { isWaking = false; return }
             wakeAttempts += 1
             nudgeTree()
@@ -226,7 +248,7 @@ final class FocusMonitor {
                 isWaking = false
                 return
             }
-            retryWake(bundleID: bundleID, step: step + 1)
+            retryWake(bundleID: bundleID, step: step + 1, generation: generation)
         }
     }
 

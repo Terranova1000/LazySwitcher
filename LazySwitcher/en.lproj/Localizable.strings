@@ -103,3 +103,6 @@
 "onboarding.step3.primary" = "Get started";
 "onboarding.step3.secondary" = "Open Settings";
 "menu.status.paused" = "Paused — press left and right Shift together";
+"launchAtLogin.reason.notFound" = "the system cannot find the app";
+"launchAtLogin.reason.unknown" = "unknown state";
+"updates.error.malformed" = "unexpected response from the server";

@@ -66,7 +66,7 @@ enum UpdateChecker {
             guard let data,
                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let tag = json["tag_name"] as? String else {
-                DispatchQueue.main.async { completion(.failed("непонятный ответ сервера")) }
+                DispatchQueue.main.async { completion(.failed(L("updates.error.malformed"))) }
                 return
             }
             let latest = tag.hasPrefix("v") ? String(tag.dropFirst()) : tag

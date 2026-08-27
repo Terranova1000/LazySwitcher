@@ -103,3 +103,6 @@
 "onboarding.step3.primary" = "Начать";
 "onboarding.step3.secondary" = "Открыть настройки";
 "menu.status.paused" = "На паузе — левый и правый Shift вместе";
+"launchAtLogin.reason.notFound" = "система не находит приложение";
+"launchAtLogin.reason.unknown" = "неизвестное состояние";
+"updates.error.malformed" = "непонятный ответ сервера";

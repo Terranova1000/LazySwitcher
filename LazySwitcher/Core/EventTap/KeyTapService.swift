@@ -66,6 +66,16 @@ final class KeyTapService {
     /// Mach absolute time of the last keystroke, for the idle timeout.
     private let lastKeystrokeTime = AtomicCounter()
 
+    /// Bumped on every event that can move the caret or change the text.
+    ///
+    /// A decision travels through three asynchronous hops before it becomes a
+    /// replacement — tap thread, decide queue, main, apply queue — and up to a
+    /// second can pass. If anything was typed in between, the characters in
+    /// front of the caret are no longer the ones the decision was about, and
+    /// deleting that many of them eats somebody else's text. Readable from any
+    /// thread for the cost of a load, so the check is free.
+    let inputGeneration = AtomicCounter()
+
     private(set) var isRunning = false
 
     // MARK: - Private
@@ -230,6 +240,7 @@ final class KeyTapService {
 
             expireBufferIfIdle(now: now)
             lastKeystrokeTime.value = now
+            inputGeneration.bump()
 
             lastKeyCode.value = UInt64(event.getIntegerValueField(.keyboardEventKeycode))
             lastFlags.value = UInt64(event.flags.rawValue)
@@ -333,6 +344,7 @@ final class KeyTapService {
     /// Called by the mouse monitor, focus monitor and Secure Input monitor.
     /// Hops to the tap thread, because the buffer belongs to it.
     func invalidateBuffer(reason: WordBuffer.ResetReason) {
+        inputGeneration.bump()
         guard let runLoop else { return }
         CFRunLoopPerformBlock(runLoop, CFRunLoopMode.commonModes.rawValue) { [weak self] in
             self?.wordBuffer.wipe(reason: reason)
