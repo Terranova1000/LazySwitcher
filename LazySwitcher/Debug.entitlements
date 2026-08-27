@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- ТОЛЬКО для Debug. В Release этого файла нет и быть не должно.
+
+	     Hardened Runtime включает library validation: в процесс можно грузить
+	     только код, подписанный тем же Team ID (или Apple). У самоподписанного
+	     сертификата Team ID нет вовсе, поэтому XCTest-бандл, который грузится
+	     внутрь приложения-хоста, отвергается dyld'ом с формулировкой
+	     "mapping process and mapped file (non-platform) have different Team IDs".
+
+	     Послабление ровно одно и ровно там, где нужно: чтобы тесты вообще
+	     запускались. Ни песочницы, ни прочих entitlements тут нет и не будет. -->
+	<key>com.apple.security.cs.disable-library-validation</key>
+	<true/>
+</dict>
+</plist>
