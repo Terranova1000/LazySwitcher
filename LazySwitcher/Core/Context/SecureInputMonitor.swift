@@ -43,10 +43,18 @@ final class SecureInputMonitor {
         onChange?(now)
     }
 
-    /// Best guess at who turned it on, for the menu text.
+    /// Who turned Secure Input on — **does not work, and is kept as evidence.**
     ///
-    /// macOS has a long-standing bug where a background app is misreported, so
-    /// every caller must phrase this as a guess rather than a fact.
+    /// The documented route is IORegistry: `IOService:/IOResources/IOConsoleUsers`
+    /// → `CGSSessionSecureInputPID`. On macOS 15.7.7 that key is simply absent,
+    /// verified while the mode was definitely on and `IsSecureEventInputEnabled()`
+    /// agreed it was (00-DECISIONS.md, Н13). So this returns nil in practice.
+    ///
+    /// Kept rather than deleted because the alternative is someone re-deriving
+    /// the same dead end from the same documentation in six months. Callers must
+    /// already handle nil, and the menu says "ввод защищён системой" with no
+    /// name — which is the better message anyway: the older reports of this API
+    /// naming the wrong background process mean a name here could be a lie.
     static func likelyResponsibleProcess() -> (pid: pid_t, name: String)? {
         let root = IORegistryGetRootEntry(kIOMainPortDefault)
         guard root != 0 else { return nil }

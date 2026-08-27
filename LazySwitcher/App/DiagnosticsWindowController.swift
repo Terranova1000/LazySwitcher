@@ -14,6 +14,14 @@ final class DiagnosticsWindowController: NSWindowController {
     private let text = NSTextView()
     private var refreshTimer: Timer?
     private var stallField: NSTextField!
+    /// A real NSSecureTextField, which is how we test the Secure Input story
+    /// without anybody typing an actual password.
+    ///
+    /// AppKit turns Secure Input on by itself when this control has focus — we
+    /// never call `EnableSecureEventInput` (CLAUDE.md rule 4). When it is
+    /// focused our own tap should go blind: `keyDown при Secure Input` must stay
+    /// at zero while `flagsChanged при Secure Input` grows.
+    private var secureProbeField: NSSecureTextField!
     private var stallResult = "не запускался"
     private var stallBaseline: UInt64 = 0
 
@@ -59,19 +67,26 @@ final class DiagnosticsWindowController: NSWindowController {
                                   target: self, action: #selector(copyReport))
         copyButton.translatesAutoresizingMaskIntoConstraints = false
 
+        secureProbeField = NSSecureTextField(string: "")
+        secureProbeField.placeholderString = "поле пароля — печатать сюда для проверки"
+        secureProbeField.translatesAutoresizingMaskIntoConstraints = false
+
         let content = NSView()
         content.addSubview(scroll)
         content.addSubview(stallLabel)
         content.addSubview(stallField)
         content.addSubview(stallButton)
         content.addSubview(copyButton)
+        content.addSubview(secureProbeField)
         window.contentView = content
+        // Focused on open, so the check needs no clicking.
+        window.initialFirstResponder = secureProbeField
 
         NSLayoutConstraint.activate([
             scroll.topAnchor.constraint(equalTo: content.topAnchor),
             scroll.leadingAnchor.constraint(equalTo: content.leadingAnchor),
             scroll.trailingAnchor.constraint(equalTo: content.trailingAnchor),
-            scroll.bottomAnchor.constraint(equalTo: stallLabel.topAnchor, constant: -12),
+            scroll.bottomAnchor.constraint(equalTo: secureProbeField.topAnchor, constant: -10),
 
             stallLabel.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 14),
             stallLabel.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -14),
@@ -82,6 +97,11 @@ final class DiagnosticsWindowController: NSWindowController {
             stallButton.centerYAnchor.constraint(equalTo: stallLabel.centerYAnchor),
             copyButton.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -14),
             copyButton.centerYAnchor.constraint(equalTo: stallLabel.centerYAnchor),
+
+            secureProbeField.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 14),
+            secureProbeField.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -14),
+            secureProbeField.bottomAnchor.constraint(equalTo: stallLabel.topAnchor, constant: -10),
+            secureProbeField.heightAnchor.constraint(equalToConstant: 24),
         ])
 
         let timer = Timer(timeInterval: 0.25, repeats: true) { [weak self] _ in self?.refresh() }
