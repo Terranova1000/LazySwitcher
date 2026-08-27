@@ -53,8 +53,10 @@ final class WordBuffer {
     enum AppendResult: Equatable {
         /// Ordinary character key; the word grew.
         case extended
-        /// Space, tab or return: the word just ended and here it is.
-        case boundary(word: [KeyRecord])
+        /// Space, tab or return: the word just ended, and here it is together
+        /// with the key that ended it — a later hotkey has to delete that key
+        /// too, and retype it, to leave the text as the user meant it.
+        case boundary(word: [KeyRecord], terminator: UInt16)
         /// Backspace took the last key back off.
         case retracted
         /// Something that invalidates our picture of the text.
@@ -86,7 +88,7 @@ final class WordBuffer {
         if Self.boundaryKeyCodes.contains(record.keyCode) {
             let word = currentWord
             wipe(reason: .wordCommitted)
-            return word.isEmpty ? .ignored : .boundary(word: word)
+            return word.isEmpty ? .ignored : .boundary(word: word, terminator: record.keyCode)
         }
 
         guard record.keyCode < 128 else { return .ignored }

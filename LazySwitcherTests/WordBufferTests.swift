@@ -33,7 +33,8 @@ final class WordBufferTests: XCTestCase {
     func testSpaceCommitsTheWordAndEmptiesTheBuffer() {
         type([VK.g, VK.h])
         let result = buffer.append(KeyRecord(keyCode: VK.space), hasCommandControlOrOption: false)
-        XCTAssertEqual(result, .boundary(word: [KeyRecord(keyCode: VK.g), KeyRecord(keyCode: VK.h)]))
+        XCTAssertEqual(result, .boundary(word: [KeyRecord(keyCode: VK.g), KeyRecord(keyCode: VK.h)],
+                                         terminator: VK.space))
         XCTAssertTrue(buffer.isEmpty)
     }
 
@@ -41,9 +42,11 @@ final class WordBufferTests: XCTestCase {
         for boundary in [VK.tab, VK.ret] {
             buffer.wipe(reason: .initial)
             type([VK.g])
-            guard case .boundary = buffer.append(KeyRecord(keyCode: boundary), hasCommandControlOrOption: false) else {
+            guard case .boundary(_, let terminator) = buffer.append(KeyRecord(keyCode: boundary),
+                                                                    hasCommandControlOrOption: false) else {
                 return XCTFail("Клавиша \(boundary) должна закрывать слово")
             }
+            XCTAssertEqual(terminator, boundary, "Терминатор нужен, чтобы хоткей знал, что стирать")
         }
     }
 

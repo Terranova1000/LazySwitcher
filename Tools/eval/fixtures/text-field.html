@@ -1,5 +1,12 @@
-<!doctype html><meta charset="utf-8"><title>Проверка обычного поля</title>
+<!doctype html><meta charset="utf-8"><title>Стенд: обычное поле</title>
 <body style="font:16px -apple-system;padding:40px">
-<h2>Проверка M3: обычное текстовое поле</h2>
-<input type="text" autofocus style="font-size:18px;padding:8px;width:300px">
+<h2>Стенд Lazy Switcher: <code>&lt;input type="text"&gt;</code></h2>
+<input id="f" type="text" autofocus style="font-size:18px;padding:8px;width:340px">
+<script>
+// Ровно один фокус после загрузки. Раньше здесь стоял setInterval, и он
+// исказил замер: повторный focus() посреди синтетических нажатий двигал
+// каретку, и стирание съедало соседний текст. Стенд не должен создавать
+// условий, которых у пользователя нет.
+addEventListener('load', () => setTimeout(() => document.getElementById('f').focus(), 100));
+</script>
 </body>

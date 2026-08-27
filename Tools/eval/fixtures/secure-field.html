@@ -1,6 +1,9 @@
-<!doctype html><meta charset="utf-8"><title>Проверка поля пароля</title>
+<!doctype html><meta charset="utf-8"><title>Стенд: поле пароля</title>
 <body style="font:16px -apple-system;padding:40px">
-<h2>Проверка M3: поле пароля</h2>
-<p>Поле ниже получает фокус само. Приложение обязано определить его как secure.</p>
-<input type="password" autofocus style="font-size:18px;padding:8px;width:300px">
+<h2>Стенд Lazy Switcher: <code>&lt;input type="password"&gt;</code></h2>
+<p>Правильный исход проверки — <b>отказ</b>: поле должно остаться нетронутым.</p>
+<input id="f" type="password" autofocus style="font-size:18px;padding:8px;width:340px">
+<script>
+addEventListener('load', () => setTimeout(() => document.getElementById('f').focus(), 100));
+</script>
 </body>

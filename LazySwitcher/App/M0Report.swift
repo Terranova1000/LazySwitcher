@@ -66,6 +66,9 @@ enum M0Report {
             row("слов набрано", "\(delegate.wordsCommitted.value)")
             row("из них читаемы в обеих", "\(delegate.wordsConvertible.value)")
             row("запрещено к замене", "\(delegate.wordsVetoed.value)")
+            row("замен сделано", "\(delegate.replacementsMade.value)")
+            row("откатов", "\(delegate.undosMade.value)")
+            row("последнее действие", delegate.lastReplacementNote)
             let ctx = delegate.context.current
             row("приложение", delegate.context.currentCold.appName)
             row("смен приложения поймано", "\(delegate.apps.activationsSeen)")

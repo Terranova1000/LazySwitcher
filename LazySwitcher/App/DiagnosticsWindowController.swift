@@ -68,7 +68,7 @@ final class DiagnosticsWindowController: NSWindowController {
         copyButton.translatesAutoresizingMaskIntoConstraints = false
 
         secureProbeField = NSSecureTextField(string: "")
-        secureProbeField.placeholderString = "поле пароля — печатать сюда для проверки"
+        secureProbeField.placeholderString = "поле пароля — щёлкните и печатайте, чтобы проверить Secure Input"
         secureProbeField.translatesAutoresizingMaskIntoConstraints = false
 
         let content = NSView()
@@ -79,8 +79,15 @@ final class DiagnosticsWindowController: NSWindowController {
         content.addSubview(copyButton)
         content.addSubview(secureProbeField)
         window.contentView = content
-        // Focused on open, so the check needs no clicking.
-        window.initialFirstResponder = secureProbeField
+        // Deliberately NOT the initial first responder.
+        //
+        // It was, briefly, so the Secure Input check needed no clicking. That
+        // check passed — AppKit does turn the mode on for this control and we do
+        // see it. But leaving it focused meant our own window switched Secure
+        // Input on **system-wide** every time it opened, blinding us and every
+        // other input tool on the machine. Focus it by clicking when you want to
+        // run the check.
+        window.initialFirstResponder = stallField
 
         NSLayoutConstraint.activate([
             scroll.topAnchor.constraint(equalTo: content.topAnchor),
@@ -198,6 +205,9 @@ final class DiagnosticsWindowController: NSWindowController {
         if let reason = delegate?.lastVetoReason {
             row("последний запрет", reason.rawValue)
         }
+        row("замен сделано", "\(delegate?.replacementsMade.value ?? 0)")
+        row("откатов", "\(delegate?.undosMade.value ?? 0)")
+        row("последнее действие", delegate?.lastReplacementNote ?? "—")
         if let ctx = delegate?.context.current, let cold = delegate?.context.currentCold {
             row("приложение", cold.appName.isEmpty ? "—" : cold.appName)
             row("политика", "\(ctx.policy)")

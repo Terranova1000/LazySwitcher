@@ -90,11 +90,11 @@
 
 ## M4 — Замена текста (2–3 дня)
 
-- [ ] `SyntheticTypingStrategy`: Backspace + `keyboardSetUnicodeString`
-- [ ] `AccessibilityStrategy` для нативных полей с проверкой результата
-- [ ] `TextReplacer`: выбор стратегии, запоминание неудач по приложению
-- [ ] `UndoController`: откат байт-в-байт, окно 5 секунд
-- [ ] Настраиваемые задержки между событиями
+- [x] `SyntheticEventSource`: Backspace + `keyboardSetUnicodeString`, `.privateState`, метка
+- [x] AX-путь для нативных полей **с чтением результата обратно** — «успех» без изменений тут норма
+- [x] `TextReplacer`: выбор стратегии, запоминание неудач по приложению
+- [x] `UndoController`: откат байт-в-байт, окно 5 секунд (5 тестов)
+- [x] Настраиваемые задержки между событиями (3 мс / 4 мс / 15 мс на разгон)
 - [ ] **Таблица совместимости**: проверить замену в Safari, Chrome, Telegram, Slack,
       Notes, Mail, Pages, TextEdit, VS Code, Notion, Discord, Figma
 - [ ] Проверить синтетику ⌘V на macOS 15 (для аварийной стратегии)

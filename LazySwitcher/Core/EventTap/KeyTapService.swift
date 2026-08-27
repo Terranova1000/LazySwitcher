@@ -52,7 +52,7 @@ final class KeyTapService {
     private let hotkeyDetector = HotkeyDetector()
 
     /// A word just ended. Delivered on `decideQueue`, never on the tap thread.
-    var onWordCommitted: (([KeyRecord]) -> Void)?
+    var onWordCommitted: (([KeyRecord], UInt16) -> Void)?
     /// A hotkey fired. Delivered on the main queue.
     var onHotkey: ((HotkeyDetector.Event) -> Void)?
 
@@ -237,11 +237,11 @@ final class KeyTapService {
                      || flags.contains(.maskAlternate)
             let record = KeyRecord(event: event, timestamp: now)
 
-            if case .boundary(let word) = wordBuffer.append(record, hasCommandControlOrOption: chord) {
+            if case .boundary(let word, let terminator) = wordBuffer.append(record, hasCommandControlOrOption: chord) {
                 // Hand off and get out. Scoring, dictionaries and anything that
                 // could block belong on the other queue.
                 if let handler = onWordCommitted {
-                    decideQueue.async { handler(word) }
+                    decideQueue.async { handler(word, terminator) }
                 }
             }
 
@@ -286,6 +286,23 @@ final class KeyTapService {
     }()
 
     // MARK: - Invalidating the buffer from outside
+
+    /// Reads the in-progress word. Asynchronous because the buffer belongs to
+    /// the tap thread and nobody else may touch it.
+    func requestCurrentWord(_ completion: @escaping ([KeyRecord]) -> Void) {
+        guard let runLoop else { completion([]); return }
+        CFRunLoopPerformBlock(runLoop, CFRunLoopMode.commonModes.rawValue) { [weak self] in
+            let word = self?.wordBuffer.currentWord ?? []
+            DispatchQueue.main.async { completion(word) }
+        }
+        CFRunLoopWakeUp(runLoop)
+    }
+
+    /// Drops the in-progress word after we have replaced it on screen, so the
+    /// buffer and the text agree again.
+    func clearBufferAfterReplacement() {
+        invalidateBuffer(reason: .replacementApplied)
+    }
 
     /// Called by the mouse monitor, focus monitor and Secure Input monitor.
     /// Hops to the tap thread, because the buffer belongs to it.

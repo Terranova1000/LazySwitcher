@@ -1,4 +1,5 @@
 import AppKit
+import Carbon.HIToolbox
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
 
@@ -11,6 +12,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let focus = FocusMonitor()
     let policies = AppPolicyStore()
     let context = ContextStore()
+    let replacer = TextReplacer()
+    let undo = UndoController()
 
     /// Words seen since launch, and how many we could render in both layouts.
     /// Counts only — the words themselves never leave memory.
@@ -20,6 +23,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private(set) var lastVetoReason: VetoGate.Reason?
     /// Last word in both readings, for the diagnostics window on screen only.
     private(set) var lastPair: (typed: String, alternative: String)?
+    let replacementsMade = AtomicCounter()
+    let undosMade = AtomicCounter()
+    private(set) var lastReplacementNote = "—"
+
+    /// The word that was just committed, kept so the hotkey can reach back for
+    /// it after the user has already pressed space.
+    private struct Committed {
+        let keys: [KeyRecord]
+        let terminator: UInt16
+        let at: Date
+    }
+    private var lastCommitted: Committed?
     private var menuBar: MenuBarController!
     private var diagnostics: DiagnosticsWindowController?
     private var reportTimer: Timer?
@@ -72,11 +87,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         inputSources.onLayoutChanged = { [weak self] in self?.keyMapper.invalidate() }
         inputSources.startWatching()
 
-        tap.onWordCommitted = { [weak self] word in self?.evaluate(word) }
+        tap.onWordCommitted = { [weak self] word, terminator in
+            self?.evaluate(word, terminator: terminator)
+        }
         tap.onHotkey = { [weak self] event in self?.handle(hotkey: event) }
 
         startTapOrExplain()
-        showDiagnostics(nil)   // M0: the diagnostics window is the whole product
+        // Deliberately not opened at launch. A menu-bar agent that throws a
+        // window in your face is bad manners, and worse, ours kept stealing
+        // focus back from the app being tested. The report file is written
+        // either way; the window is available from the menu.
 
         // M0 scaffolding — remove at M1.
         let t = Timer(timeInterval: 2, repeats: true) { [weak self] _ in
@@ -87,6 +107,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         reportTimer = t
         M0Report.write(tap: tap, secureInput: secureInput)
         M0TimeoutSweep.watchForTrigger(tap: tap)
+        M4SelfTest.watchForTrigger(delegate: self)
     }
 
     private func startTapOrExplain() {
@@ -133,12 +154,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// M1–M3 end to end: a word ended, check it is allowed to be touched at all,
     /// then render it in the active layout and in the other one. Deciding which
     /// reading is right is M5; applying the change is M4.
-    private func evaluate(_ word: [KeyRecord]) {
+    private func evaluate(_ word: [KeyRecord], terminator: UInt16) {
         wordsCommitted.bump()
+        guard let reading = read(word) else { return }
+        wordsConvertible.bump()
 
+        // The veto runs on the rendered word, before any scoring — it is cheap
+        // and it is the layer that keeps us out of trouble.
+        let verdict = VetoGate.evaluate(.init(word: reading.typed, context: context.current))
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            lastPair = (typed: reading.typed, alternative: reading.alternative)
+            lastCommitted = Committed(keys: word, terminator: terminator, at: Date())
+            // Any new typing means the previous replacement is no longer the
+            // thing sitting in front of the caret.
+            undo.invalidate()
+            if case .vetoed(let reason) = verdict {
+                wordsVetoed.bump()
+                lastVetoReason = reason
+            } else {
+                lastVetoReason = nil
+            }
+            // Automatic replacement waits for the detector (M5). Until then the
+            // hotkey is the only thing that changes text, which also makes this
+            // the safest possible first version.
+        }
+    }
+
+    /// Renders a run of keystrokes in the active layout and in the other one.
+    private func read(_ word: [KeyRecord]) -> (typed: String, alternative: String, target: TISInputSource)? {
         guard let current = InputSourceService.currentLayout(),
-              let currentTable = keyMapper.table(for: current) else { return }
-
+              let currentTable = keyMapper.table(for: current) else { return nil }
         let others = InputSourceService.enabledKeyboardLayouts().filter {
             InputSourceService.identifier(of: $0) != currentTable.layoutID
         }
@@ -146,30 +192,124 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
               let otherTable = keyMapper.table(for: other),
               let typed = keyMapper.render(word, with: currentTable),
               let alternative = keyMapper.render(word, with: otherTable)
-        else { return }
+        else { return nil }
+        return (typed, alternative, other)
+    }
 
-        wordsConvertible.bump()
+    // MARK: - Hotkey
 
-        // The veto runs on the rendered word, before any scoring — it is cheap
-        // and it is the layer that keeps us out of trouble.
-        let verdict = VetoGate.evaluate(.init(word: typed, context: context.current))
-        DispatchQueue.main.async { [weak self] in
+    private func handle(hotkey event: HotkeyDetector.Event) {
+        switch event {
+        case .panicToggle:
+            NSSound.beep()                      // M6 wires the real pause
+        case .doubleTapShift:
+            // Undo first: pressing the hotkey right after a replacement means
+            // "that was wrong", not "do it again".
+            if undo.isAvailable, let pending = undo.consume() {
+                revert(pending)
+                return
+            }
+            convertLastWord()
+        }
+    }
+
+    private func convertLastWord() {
+        // The in-progress word if there is one; otherwise the word the user
+        // just finished with a space.
+        tap.requestCurrentWord { [weak self] inProgress in
             guard let self else { return }
-            lastPair = (typed: typed, alternative: alternative)
-            if case .vetoed(let reason) = verdict {
-                wordsVetoed.bump()
-                lastVetoReason = reason
+            if !inProgress.isEmpty {
+                apply(keys: inProgress, trailing: nil)
+            } else if let committed = lastCommitted,
+                      Date().timeIntervalSince(committed.at) < 30,
+                      committed.terminator == Self.spaceKeyCode {
+                apply(keys: committed.keys, trailing: " ")
             } else {
-                lastVetoReason = nil
+                note("нечего исправлять")
+                NSSound.beep()
             }
         }
     }
 
-    private func handle(hotkey event: HotkeyDetector.Event) {
-        switch event {
-        case .doubleTapShift: NSSound.beep()          // M6 wires the real action
-        case .panicToggle:    NSSound.beep()
+    private static let spaceKeyCode: UInt16 = 0x31
+
+    private func apply(keys: [KeyRecord], trailing: String?) {
+        guard let reading = read(keys) else { note("не удалось прочитать слово"); return }
+
+        let hot = context.current
+        let verdict = VetoGate.evaluate(.init(word: reading.typed,
+                                              context: hot,
+                                              userExclusions: [],
+                                              isExplicitRequest: true))
+        if case .vetoed(let reason) = verdict {
+            wordsVetoed.bump()
+            lastVetoReason = reason
+            note("запрещено: \(reason.rawValue)")
+            NSSound.beep()
+            return
         }
+
+        let bundleID = context.currentCold.bundleID
+        let from = reading.typed + (trailing ?? "")
+        let to = reading.alternative + (trailing ?? "")
+
+        // Off the main thread: synthetic typing sleeps between events, and a
+        // ten-letter word is over a hundred milliseconds of it.
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let self else { return }
+            let outcome = replacer.replace(original: from, with: to, in: bundleID)
+            DispatchQueue.main.async {
+                guard outcome.succeeded else { self.note("замена не удалась"); return }
+                self.replacementsMade.bump()
+                self.note("\(outcome.strategy.rawValue): «\(reading.typed)» → «\(reading.alternative)»")
+                self.tap.clearBufferAfterReplacement()
+                self.undo.arm(original: from, replacement: to, bundleID: bundleID)
+                // Switch the layout too, or the next word comes out wrong again
+                // and the correction was pointless.
+                self.inputSources.select(reading.target)
+                NSSound(named: "Tink")?.play()
+            }
+        }
+    }
+
+    private func revert(_ pending: UndoController.Pending) {
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let self else { return }
+            let outcome = replacer.replace(original: pending.replacement,
+                                           with: pending.original,
+                                           in: pending.bundleID)
+            DispatchQueue.main.async {
+                guard outcome.succeeded else { self.note("откат не удался"); return }
+                self.undosMade.bump()
+                self.note("откат: вернули «\(pending.original)»")
+                self.tap.clearBufferAfterReplacement()
+                NSSound(named: "Pop")?.play()
+            }
+        }
+    }
+
+    /// Entry point for `M4SelfTest`, which needs to drive a replacement without
+    /// a keyboard. Same code path as the hotkey, no shortcuts.
+    func applyForSelfTest(keys: [KeyRecord]) {
+        apply(keys: keys, trailing: nil)
+    }
+
+    /// Re-reads the focused element and republishes context. The self-test needs
+    /// it because it brings an app forward that may already have been frontmost,
+    /// in which case no activation notification fires and the cached role is
+    /// whatever it was before.
+    func refreshContextForSelfTest() {
+        focus.refresh(bundleID: apps.bundleID)
+        publishContext(bundleID: apps.bundleID, appName: apps.appName)
+    }
+
+    func readingForSelfTest(keys: [KeyRecord]) -> (typed: String, alternative: String)? {
+        guard let reading = read(keys) else { return nil }
+        return (reading.typed, reading.alternative)
+    }
+
+    private func note(_ text: String) {
+        DispatchQueue.main.async { [weak self] in self?.lastReplacementNote = text }
     }
 
     @objc func showDiagnostics(_ sender: Any?) {
