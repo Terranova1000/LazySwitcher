@@ -75,6 +75,7 @@ enum M0Report {
             row("AX ошибка", delegate.focus.lastError)
             row("побудок дерева", "\(delegate.focus.wakeSuccesses) удачных из \(delegate.focus.wakeAttempts)")
             row("AXManualAccessibility", delegate.focus.manualAccessibilityResult)
+            row("запрос окон (побудка)", delegate.focus.nudgeResult)
             row("замена разрешена", flag(ctx.allowsAutomaticReplacement))
         }
 

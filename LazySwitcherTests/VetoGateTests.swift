@@ -184,3 +184,86 @@ final class VetoGateTests: XCTestCase {
         assertAllowed("j,]zcytybt") // объяснение
     }
 }
+
+/// The Chrome compromise (00-DECISIONS.md, O7).
+///
+/// Chrome and Firefox give us no signal at all about password fields — no AX
+/// subrole, no Secure Input. Refusing outright would make the product useless
+/// for anyone who lives in Chrome; acting automatically would eventually type
+/// into a password field. So: never on our own, only when asked.
+final class OpaqueBrowserTests: XCTestCase {
+
+    private var chrome: HotContext {
+        HotContext(isSecureInput: false, policy: .hotkeyOnly,
+                   fieldRole: .unknown, fieldRoleUnavailable: true)
+    }
+
+    private func verdict(_ word: String, context: HotContext, explicit: Bool) -> VetoGate.Verdict {
+        VetoGate.evaluate(.init(word: word, context: context, isExplicitRequest: explicit))
+    }
+
+    func testAutomaticReplacementIsImpossibleInChrome() {
+        XCTAssertEqual(verdict("ghbdtn", context: chrome, explicit: false), .vetoed(.fieldRole))
+        XCTAssertFalse(chrome.allowsAutomaticReplacement)
+        XCTAssertFalse(chrome.allowsAnyAction)
+    }
+
+    func testHotkeyWorksInChrome() {
+        XCTAssertEqual(verdict("ghbdtn", context: chrome, explicit: true), .allowed)
+    }
+
+    /// The exception is for apps that can *never* answer, not for a query that
+    /// happened to come back empty this time — those may resolve on a retry, and
+    /// treating them the same would open the hole in every app.
+    func testTransientUnknownIsStillRefusedEvenOnAHotkey() {
+        let transient = HotContext(isSecureInput: false, policy: .automatic,
+                                   fieldRole: .unknown, fieldRoleUnavailable: false)
+        XCTAssertEqual(verdict("ghbdtn", context: transient, explicit: true), .vetoed(.fieldRole))
+    }
+
+    func testSecureInputStillWinsInChrome() {
+        var secure = chrome
+        secure.isSecureInput = true
+        XCTAssertEqual(verdict("ghbdtn", context: secure, explicit: true), .vetoed(.secureInput))
+    }
+
+    /// A field Chrome *did* identify as a password — it happens for native
+    /// Chrome dialogs — must be refused even on an explicit request.
+    func testAKnownSecureFieldIsNeverOpenedByTheException() {
+        let knownSecure = HotContext(isSecureInput: false, policy: .hotkeyOnly,
+                                     fieldRole: .secure, fieldRoleUnavailable: true)
+        XCTAssertEqual(verdict("ghbdtn", context: knownSecure, explicit: true), .vetoed(.fieldRole))
+    }
+
+    func testAllTheUsualShapeRulesStillApplyInChrome() {
+        XCTAssertNotEqual(verdict("user@mail.ru", context: chrome, explicit: true), .allowed)
+        XCTAssertNotEqual(verdict("~/Documents", context: chrome, explicit: true), .allowed)
+        XCTAssertNotEqual(verdict("MySQL", context: chrome, explicit: true), .allowed)
+        XCTAssertNotEqual(verdict("ABCdefghijk!mn", context: chrome, explicit: true), .allowed)
+    }
+}
+
+final class OpaqueBrowserPolicyTests: XCTestCase {
+
+    func testBrowsersWithoutFieldRolesGetHotkeyOnly() {
+        let store = AppPolicyStore()
+        for id in ["com.google.Chrome", "org.mozilla.firefox", "com.brave.Browser",
+                   "com.microsoft.edgemac", "company.thebrowser.Browser"] {
+            XCTAssertEqual(store.policy(for: id), .hotkeyOnly, "\(id): только по хоткею")
+            XCTAssertTrue(store.hidesFieldRoles(id))
+        }
+    }
+
+    func testSafariIsNotAmongThem() {
+        let store = AppPolicyStore()
+        XCTAssertEqual(store.policy(for: "com.apple.Safari"), .automatic,
+                       "В Safari поле пароля определяется, автозамена разрешена")
+        XCTAssertFalse(store.hidesFieldRoles("com.apple.Safari"))
+    }
+
+    func testUserMayStillTurnChromeOffCompletely() {
+        let store = AppPolicyStore()
+        XCTAssertTrue(store.setPolicy(.disabled, for: "com.google.Chrome"))
+        XCTAssertEqual(store.policy(for: "com.google.Chrome"), .disabled)
+    }
+}

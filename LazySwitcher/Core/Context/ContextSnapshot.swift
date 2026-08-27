@@ -40,9 +40,24 @@ struct HotContext: Equatable {
     var targetLayoutSlot: UInt8 = 0
     var generation: UInt32 = 0
 
+    /// The app never exposes field roles at all — Chrome and Firefox, whose web
+    /// accessibility tree stays unbuilt (00-DECISIONS.md, Н10).
+    ///
+    /// This is a different thing from "we happened to get `unknown` this time",
+    /// and the distinction matters: a transient unknown may resolve on the next
+    /// query, while this one never will. Only an explicit request from the user
+    /// gets past it, and only because asking for a conversion is itself proof
+    /// that the field is not a password.
+    var fieldRoleUnavailable: Bool = false
+
     /// Nothing may happen unless every one of these says so. Fail closed.
     var allowsAnyAction: Bool {
         !isSecureInput && policy != .disabled && fieldRole == .text
+    }
+
+    /// The narrow exception, for a hotkey the user pressed deliberately.
+    var allowsExplicitActionDespiteUnknownField: Bool {
+        !isSecureInput && policy != .disabled && fieldRole == .unknown && fieldRoleUnavailable
     }
 
     var allowsAutomaticReplacement: Bool {
@@ -56,6 +71,7 @@ struct HotContext: Equatable {
         value |= isSecureInput ? 1 : 0
         value |= UInt64(policy.rawValue) << 1        // 2 бита
         value |= UInt64(fieldRole.rawValue) << 3     // 3 бита
+        value |= (fieldRoleUnavailable ? 1 : 0) << 6
         value |= UInt64(sourceLayoutSlot) << 8
         value |= UInt64(targetLayoutSlot) << 16
         value |= UInt64(generation) << 32
@@ -68,16 +84,19 @@ struct HotContext: Equatable {
         isSecureInput = packed & 1 != 0
         policy = AppPolicy(rawValue: UInt8((packed >> 1) & 0b11)) ?? .disabled
         fieldRole = FieldRole(rawValue: UInt8((packed >> 3) & 0b111)) ?? .unknown
+        fieldRoleUnavailable = (packed >> 6) & 1 != 0
         sourceLayoutSlot = UInt8((packed >> 8) & 0xFF)
         targetLayoutSlot = UInt8((packed >> 16) & 0xFF)
         generation = UInt32((packed >> 32) & 0xFFFF_FFFF)
     }
 
     init(isSecureInput: Bool, policy: AppPolicy, fieldRole: FieldRole,
+         fieldRoleUnavailable: Bool = false,
          sourceLayoutSlot: UInt8 = 0, targetLayoutSlot: UInt8 = 0, generation: UInt32 = 0) {
         self.isSecureInput = isSecureInput
         self.policy = policy
         self.fieldRole = fieldRole
+        self.fieldRoleUnavailable = fieldRoleUnavailable
         self.sourceLayoutSlot = sourceLayoutSlot
         self.targetLayoutSlot = targetLayoutSlot
         self.generation = generation

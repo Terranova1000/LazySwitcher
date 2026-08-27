@@ -126,6 +126,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         hot.isSecureInput = secureInput.isEnabled
         hot.policy = policies.policy(for: bundleID)
         hot.fieldRole = focus.fieldRole
+        hot.fieldRoleUnavailable = policies.hidesFieldRoles(bundleID)
         context.publish(hot: hot, cold: ColdContext(bundleID: bundleID, appName: appName))
     }
 

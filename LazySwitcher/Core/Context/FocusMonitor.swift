@@ -198,12 +198,25 @@ final class FocusMonitor {
         retryWake(bundleID: bundleID, step: 0)
     }
 
+    /// Asking for the window list is a heavier request than asking for focus,
+    /// and in some Chromium builds that is enough to make the tree get built.
+    /// Cheap to try, harmless if it does nothing.
+    private func nudgeTree() {
+        guard let app = observedElement else { return }
+        var windows: CFTypeRef?
+        let status = AXUIElementCopyAttributeValue(app, kAXWindowsAttribute as CFString, &windows)
+        nudgeResult = "\(Self.describe(status)), окон: \((windows as? [AnyObject])?.count ?? 0)"
+    }
+
+    private(set) var nudgeResult = "—"
+
     private func retryWake(bundleID: String, step: Int) {
         guard step < Self.wakeDelays.count else { isWaking = false; return }
         DispatchQueue.main.asyncAfter(deadline: .now() + Self.wakeDelays[step]) { [weak self] in
             guard let self else { return }
             guard observedElement != nil else { isWaking = false; return }
             wakeAttempts += 1
+            nudgeTree()
             let before = fieldRole
             // refresh may call scheduleWakeRetry again; isWaking is still true,
             // so it is a no-op and the ladder cannot branch.

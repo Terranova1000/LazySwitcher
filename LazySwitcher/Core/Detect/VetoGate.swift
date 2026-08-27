@@ -60,7 +60,17 @@ enum VetoGate {
         // 1–3. Context. Cheapest checks, harshest consequences.
         if context.isSecureInput { return .vetoed(.secureInput) }
         if context.policy == .disabled { return .vetoed(.appPolicy) }
-        if context.fieldRole != .text { return .vetoed(.fieldRole) }
+        if context.fieldRole != .text {
+            // One exception, and it is narrow on purpose: an explicit request in
+            // an app that never exposes field roles at all (Chrome, Firefox).
+            // The user pressing the hotkey is the signal we cannot obtain any
+            // other way — nobody asks to convert their own password. Automatic
+            // replacement stays impossible there, because those apps carry the
+            // `.hotkeyOnly` policy.
+            guard input.isExplicitRequest, context.allowsExplicitActionDespiteUnknownField else {
+                return .vetoed(.fieldRole)
+            }
+        }
 
         if word.isEmpty { return .vetoed(.tooShort) }
 

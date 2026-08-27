@@ -45,6 +45,27 @@ final class AppPolicyStore {
         "com.panic.Nova", "com.barebones.bbedit", "org.vim.MacVim",
     ]
 
+    /// Browsers that never expose the role of the focused field.
+    ///
+    /// Measured, not assumed (00-DECISIONS.md, Н10 and Н12): Chromium and Gecko
+    /// keep their web accessibility tree unbuilt, and neither turns on Secure
+    /// Input for `<input type="password">`. So inside these apps we have no
+    /// signal whatsoever that the caret is in a password field.
+    ///
+    /// Rather than refuse outright — which would make the product useless for
+    /// anyone whose main browser is Chrome — they run in hotkey-only mode. We
+    /// never touch anything on our own there; the user pressing the hotkey is
+    /// the signal we cannot get any other way, and nobody asks to convert their
+    /// password. Waking Chromium with the private `AXEnhancedUserInterface` was
+    /// considered and rejected: it makes windows jump around.
+    static let opaqueBrowsers: Set<String> = [
+        "com.google.Chrome", "com.google.Chrome.beta", "com.google.Chrome.canary",
+        "org.chromium.Chromium", "com.microsoft.edgemac", "com.brave.Browser",
+        "company.thebrowser.Browser", "com.vivaldi.Vivaldi", "com.operasoftware.Opera",
+        "org.mozilla.firefox", "org.mozilla.firefoxdeveloperedition", "org.mozilla.nightly",
+        "com.mozilla.librewolf", "app.zen-browser.zen",
+    ]
+
     private var userOverrides: [String: AppPolicy] = [:]
 
     func policy(for bundleID: String) -> AppPolicy {
@@ -52,12 +73,17 @@ final class AppPolicyStore {
         if Self.lockedExclusions.contains(bundleID) { return .disabled }
         if let override = userOverrides[bundleID] { return override }
         if Self.defaultDisabled.contains(bundleID) { return .disabled }
+        if Self.opaqueBrowsers.contains(bundleID) { return .hotkeyOnly }
         // An unknown app starts cautious and earns its way up (03-ALGORITHM §10).
         return .automatic
     }
 
     func isLocked(_ bundleID: String) -> Bool {
         Self.lockedExclusions.contains(bundleID)
+    }
+
+    func hidesFieldRoles(_ bundleID: String) -> Bool {
+        Self.opaqueBrowsers.contains(bundleID)
     }
 
     /// Returns false — and changes nothing — for a locked app.
