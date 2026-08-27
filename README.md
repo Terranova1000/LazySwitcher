@@ -1,4 +1,15 @@
-# Lazy Switcher
+<p align="center">
+  <img src="LazySwitcher/Assets.xcassets/Banner.imageset/banner.jpg" width="720" alt="Lazy Switcher">
+</p>
+
+<h1 align="center">Lazy Switcher</h1>
+
+<p align="center">
+  Замечает текст, набранный не в той раскладке, и исправляет его.<br>
+  Бесплатно · Локально · Без ИИ · macOS 14+
+</p>
+
+---
 
 Замечает текст, набранный не в той раскладке, и исправляет его.
 
