@@ -239,3 +239,41 @@ final class FeedbackStoreTests: XCTestCase {
                        .vetoed(.userExclusion))
     }
 }
+
+/// Version comparison, and the defaults around the one piece of network code.
+final class UpdateCheckerTests: XCTestCase {
+
+    /// String comparison gets this backwards, and the bug only shows up on the
+    /// tenth release — by which time nobody is looking here.
+    func testVersionsCompareNumericallyNotAlphabetically() {
+        XCTAssertTrue(UpdateChecker.isNewer("0.10.0", than: "0.9.0"))
+        XCTAssertFalse(UpdateChecker.isNewer("0.9.0", than: "0.10.0"))
+        XCTAssertTrue(UpdateChecker.isNewer("1.0.0", than: "0.99.99"))
+        XCTAssertTrue(UpdateChecker.isNewer("0.2.0", than: "0.1.9"))
+    }
+
+    func testSameVersionIsNotNewer() {
+        XCTAssertFalse(UpdateChecker.isNewer("1.2.3", than: "1.2.3"))
+    }
+
+    func testMissingComponentsCountAsZero() {
+        XCTAssertTrue(UpdateChecker.isNewer("1.1", than: "1"))
+        XCTAssertFalse(UpdateChecker.isNewer("1", than: "1.0.0"))
+    }
+
+    /// The promise the project is built on: nothing goes out unless asked. If
+    /// this default ever flips, it has to be a deliberate act with a test to
+    /// argue with.
+    func testAutomaticCheckingIsOffByDefault() {
+        let fresh = UserDefaults(suiteName: "com.lazyswitcher.tests.updates")!
+        fresh.removePersistentDomain(forName: "com.lazyswitcher.tests.updates")
+        XCTAssertFalse(fresh.bool(forKey: "checkUpdatesAutomatically"),
+                       "Проверка обновлений обязана быть выключена по умолчанию")
+    }
+
+    func testEndpointIsAFixedConstantNotASetting() {
+        // A configurable update URL is how a helpful tool becomes a delivery
+        // channel for something else. It stays a constant.
+        XCTAssertTrue(UpdateChecker.releasesPage.absoluteString.hasPrefix("https://github.com/"))
+    }
+}

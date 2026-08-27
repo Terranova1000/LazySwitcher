@@ -296,6 +296,15 @@ final class KeyTapService {
 
     // MARK: - Invalidating the buffer from outside
 
+    /// Changes the gesture. Hops to the tap thread: the detector belongs to it.
+    func setHotkeyStyle(_ style: HotkeyStyle) {
+        guard let runLoop else { return }
+        CFRunLoopPerformBlock(runLoop, CFRunLoopMode.commonModes.rawValue) { [weak self] in
+            self?.hotkeyDetector.config.style = style
+        }
+        CFRunLoopWakeUp(runLoop)
+    }
+
     /// Reads what the hotkey may act on: the word being typed, or the one just
     /// finished. Both come from the same hop to the tap thread, so they cannot
     /// disagree with each other — asking twice could see a keystroke land in

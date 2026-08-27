@@ -18,6 +18,9 @@ final class Settings {
         case soundVolume = "soundVolume"
         case actInUnidentifiedFields = "actInUnidentifiedFields"
         case appPolicies = "appPolicies"
+        case hotkeyStyle = "hotkeyStyle"
+        case checkUpdatesAutomatically = "checkUpdatesAutomatically"
+        case lastUpdateCheck = "lastUpdateCheck"
     }
 
     private init() {
@@ -29,6 +32,8 @@ final class Settings {
             Key.soundName.rawValue: "Tink",
             Key.soundVolume.rawValue: 0.5,
             Key.actInUnidentifiedFields.rawValue: false,
+            Key.hotkeyStyle.rawValue: HotkeyStyle.doubleShift.rawValue,
+            Key.checkUpdatesAutomatically.rawValue: false,
         ])
     }
 
@@ -48,6 +53,29 @@ final class Settings {
     var switchLayoutAfterReplacement: Bool {
         get { defaults.bool(forKey: Key.switchLayoutAfterReplacement.rawValue) }
         set { defaults.set(newValue, forKey: Key.switchLayoutAfterReplacement.rawValue) }
+    }
+
+    var hotkeyStyle: HotkeyStyle {
+        get { HotkeyStyle(rawValue: defaults.string(forKey: Key.hotkeyStyle.rawValue) ?? "")
+                ?? .doubleShift }
+        set { defaults.set(newValue.rawValue, forKey: Key.hotkeyStyle.rawValue) }
+    }
+
+    // MARK: - Updates
+
+    /// Off by default, and it stays off unless the user turns it on.
+    ///
+    /// This is the one place where the app is allowed to open a network
+    /// connection, and the promise it bends is the project's main one, so the
+    /// defaults are the strict reading: nothing happens unless asked.
+    var checkUpdatesAutomatically: Bool {
+        get { defaults.bool(forKey: Key.checkUpdatesAutomatically.rawValue) }
+        set { defaults.set(newValue, forKey: Key.checkUpdatesAutomatically.rawValue) }
+    }
+
+    var lastUpdateCheck: Date? {
+        get { defaults.object(forKey: Key.lastUpdateCheck.rawValue) as? Date }
+        set { defaults.set(newValue, forKey: Key.lastUpdateCheck.rawValue) }
     }
 
     // MARK: - Sound

@@ -30,6 +30,19 @@ final class MenuBarController {
         redraw()
     }
 
+    /// A newer version exists. Shown as a menu entry rather than a notification:
+    /// a background agent that pops an alert to say hello is a nuisance.
+    func showUpdateAvailable(version: String) {
+        guard let menu = item.menu else { return }
+        let title = "Доступна версия \(version) — скачать…"
+        if menu.items.contains(where: { $0.title == title }) { return }
+        let entry = NSMenuItem(title: title, action: #selector(AppDelegate.openReleasesPage(_:)),
+                               keyEquivalent: "")
+        entry.target = target
+        menu.insertItem(entry, at: 1)
+        menu.insertItem(.separator(), at: 2)
+    }
+
     /// Blinks the icon after a correction. The cheapest possible acknowledgement
     /// that something changed, and it works with the sound turned off.
     func flash() {

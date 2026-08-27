@@ -148,3 +148,131 @@ final class HotkeyDetectorTests: XCTestCase {
         XCTAssertNil(down(left, at: 1.15)); XCTAssertEqual(up(left, at: 1.20), .doubleTapShift)
     }
 }
+
+/// The other gestures. Each one has to keep the properties that make the
+/// default safe — no firing under Secure Input, no firing while a modifier is
+/// doing its real job.
+final class HotkeyStyleTests: XCTestCase {
+
+    private var detector: HotkeyDetector!
+
+    private func configure(_ style: HotkeyStyle) {
+        detector = HotkeyDetector()
+        detector.config.style = style
+    }
+
+    private func send(_ keyCode: UInt16, down: Bool, at t: TimeInterval,
+                      flag: CGEventFlags, secure: Bool = false) -> HotkeyDetector.Event? {
+        var raw: UInt64 = 0
+        if down { raw = flag.rawValue | HotkeyStyle.deviceBit(for: keyCode) }
+        return detector.handleFlagsChanged(flags: CGEventFlags(rawValue: raw), keyCode: keyCode,
+                                           timestamp: t, secureInputActive: secure)
+    }
+
+    // MARK: - Double taps on other modifiers
+
+    func testDoubleOptionFires() {
+        configure(.doubleOption)
+        XCTAssertNil(send(0x3A, down: true, at: 0.00, flag: .maskAlternate))
+        XCTAssertNil(send(0x3A, down: false, at: 0.06, flag: .maskAlternate))
+        XCTAssertNil(send(0x3A, down: true, at: 0.18, flag: .maskAlternate))
+        XCTAssertEqual(send(0x3A, down: false, at: 0.24, flag: .maskAlternate), .doubleTapShift)
+    }
+
+    func testDoubleCommandFires() {
+        configure(.doubleCommand)
+        XCTAssertNil(send(0x37, down: true, at: 0.00, flag: .maskCommand))
+        XCTAssertNil(send(0x37, down: false, at: 0.05, flag: .maskCommand))
+        XCTAssertNil(send(0x37, down: true, at: 0.15, flag: .maskCommand))
+        XCTAssertEqual(send(0x37, down: false, at: 0.20, flag: .maskCommand), .doubleTapShift)
+    }
+
+    /// ⌘C is Command down, C, Command up. The keyDown in the middle is what
+    /// stops a real shortcut from being read as the gesture — the same guard
+    /// that protects capitals under the Shift style.
+    func testUsingCommandAsAModifierDoesNotFire() {
+        configure(.doubleCommand)
+        XCTAssertNil(send(0x37, down: true, at: 0.00, flag: .maskCommand))
+        detector.noteKeyDown()                       // «C»
+        XCTAssertNil(send(0x37, down: false, at: 0.08, flag: .maskCommand))
+        XCTAssertNil(send(0x37, down: true, at: 0.18, flag: .maskCommand))
+        detector.noteKeyDown()                       // «V»
+        XCTAssertNil(send(0x37, down: false, at: 0.24, flag: .maskCommand))
+    }
+
+    func testShiftDoesNotFireWhenAnotherStyleIsChosen() {
+        configure(.doubleOption)
+        XCTAssertNil(send(0x38, down: true, at: 0.00, flag: .maskShift))
+        XCTAssertNil(send(0x38, down: false, at: 0.05, flag: .maskShift))
+        XCTAssertNil(send(0x38, down: true, at: 0.15, flag: .maskShift))
+        XCTAssertNil(send(0x38, down: false, at: 0.20, flag: .maskShift),
+                     "Выбран двойной ⌥ — Shift не должен ничего делать")
+    }
+
+    // MARK: - Single press of a right-hand modifier
+
+    func testRightCommandFiresOnASinglePress() {
+        configure(.rightCommand)
+        XCTAssertNil(send(0x36, down: true, at: 0.00, flag: .maskCommand))
+        XCTAssertEqual(send(0x36, down: false, at: 0.09, flag: .maskCommand), .doubleTapShift)
+    }
+
+    func testLeftCommandDoesNothingWhenRightIsChosen() {
+        configure(.rightCommand)
+        XCTAssertNil(send(0x37, down: true, at: 0.00, flag: .maskCommand))
+        XCTAssertNil(send(0x37, down: false, at: 0.09, flag: .maskCommand))
+    }
+
+    func testHoldingTheRightModifierIsNotAPress() {
+        configure(.rightOption)
+        XCTAssertNil(send(0x3D, down: true, at: 0.00, flag: .maskAlternate))
+        XCTAssertNil(send(0x3D, down: false, at: 0.50, flag: .maskAlternate),
+                     "Удержание — это работа модификатора, а не жест")
+    }
+
+    func testRightModifierUsedInACombinationDoesNotFire() {
+        configure(.rightOption)
+        XCTAssertNil(send(0x3D, down: true, at: 0.00, flag: .maskAlternate))
+        detector.noteKeyDown()
+        XCTAssertNil(send(0x3D, down: false, at: 0.10, flag: .maskAlternate))
+    }
+
+    // MARK: - Invariants that hold for every style
+
+    func testNoStyleFiresUnderSecureInput() {
+        for style in HotkeyStyle.allCases {
+            configure(style)
+            let key = style.keyCodes.min()!
+            _ = send(key, down: true, at: 0.00, flag: style.flag, secure: true)
+            _ = send(key, down: false, at: 0.05, flag: style.flag, secure: true)
+            _ = send(key, down: true, at: 0.15, flag: style.flag, secure: true)
+            XCTAssertNil(send(key, down: false, at: 0.20, flag: style.flag, secure: true),
+                         "\(style): не должно срабатывать при Secure Input")
+        }
+    }
+
+    /// The panic chord stays on both Shifts whatever the main gesture is: it is
+    /// what people reach for when something has gone wrong, and a gesture that
+    /// moves with a setting is no use then.
+    func testPanicChordWorksUnderEveryStyle() {
+        for style in HotkeyStyle.allCases {
+            configure(style)
+            XCTAssertNil(send(0x38, down: true, at: 0.00, flag: .maskShift))
+            _ = send(0x3C, down: true, at: 0.03, flag: .maskShift)
+            let release = detector.handleFlagsChanged(
+                flags: CGEventFlags(rawValue: CGEventFlags.maskShift.rawValue
+                                    | HotkeyStyle.deviceBit(for: 0x3C)),
+                keyCode: 0x38, timestamp: 0.15, secureInputActive: false)
+            XCTAssertEqual(release, .panicToggle, "\(style): паника обязана работать всегда")
+        }
+    }
+
+    func testEveryStyleHasKeyCodesAndATitle() {
+        for style in HotkeyStyle.allCases {
+            XCTAssertFalse(style.keyCodes.isEmpty, "\(style)")
+            XCTAssertFalse(style.title.isEmpty, "\(style)")
+            XCTAssertFalse(style.disqualifyingFlags.contains(style.flag),
+                           "\(style): собственный модификатор не может сам себя дисквалифицировать")
+        }
+    }
+}

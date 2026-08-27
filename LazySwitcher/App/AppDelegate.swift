@@ -67,6 +67,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var menuBar: MenuBarController!
     private var diagnostics: DiagnosticsWindowController?
     private var settingsWindow: SettingsWindowController?
+    private var onboarding: OnboardingWindowController?
     private var reportTimer: Timer?
     private var permissionTimer: Timer?
 
@@ -144,6 +145,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         M0TimeoutSweep.watchForTrigger(tap: tap)
         M4SelfTest.watchForTrigger(delegate: self)
         M5SelfTest.watchForTrigger(delegate: self)
+        tap.setHotkeyStyle(Settings.shared.hotkeyStyle)
+
+        // Only if the user asked for it, and at most weekly.
+        UpdateChecker.checkOnScheduleIfEnabled { [weak self] outcome in
+            guard case .updateAvailable(let latest, _) = outcome else { return }
+            self?.menuBar.showUpdateAvailable(version: latest)
+        }
     }
 
     private func startTapOrExplain() {
@@ -153,7 +161,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
         menuBar.update(permissions: state.looksStuck ? .stuck : .missing)
-        if !state.looksStuck { Permissions.request() }
+        showOnboarding()
         watchForPermission()
     }
 
@@ -340,6 +348,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// rather than trying to work out which change mattered.
     func settingsDidChange() {
         publishContext(bundleID: apps.bundleID, appName: apps.appName)
+        tap.setHotkeyStyle(Settings.shared.hotkeyStyle)
+    }
+
+    func showOnboarding() {
+        if onboarding == nil { onboarding = OnboardingWindowController(app: self) }
+        NSApp.activate(ignoringOtherApps: true)
+        onboarding?.showWindow(nil)
     }
 
     @objc func showSettings(_ sender: Any?) {
@@ -603,6 +618,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         NSApp.activate(ignoringOtherApps: true)
         diagnostics?.showWindow(nil)
+    }
+
+    @objc func openReleasesPage(_ sender: Any?) {
+        NSWorkspace.shared.open(UpdateChecker.releasesPage)
     }
 
     @objc func openAccessibilitySettings(_ sender: Any?) {

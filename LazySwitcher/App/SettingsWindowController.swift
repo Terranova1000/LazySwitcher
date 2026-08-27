@@ -38,8 +38,10 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         tabs.translatesAutoresizingMaskIntoConstraints = false
 
         tabs.addTabViewItem(tab("Основное", view: generalTab()))
+        tabs.addTabViewItem(tab("Клавиши", view: keysTab()))
         tabs.addTabViewItem(tab("Звук", view: soundTab()))
         tabs.addTabViewItem(tab("Приложения", view: appsTab()))
+        tabs.addTabViewItem(tab("Обновления", view: updatesTab()))
 
         let content = NSView()
         content.addSubview(tabs)
@@ -105,11 +107,6 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
                + "на четырёх — примерно одно на сто пятнадцать слов. Короткие слова всё равно "
                + "исправляются, если следующее слово подтверждает раскладку."),
             switchLayout,
-            NSBox(),
-            NSTextField(labelWithString: "Горячие клавиши"),
-            hint("Двойное нажатие Shift — исправить последнее слово или выделенный текст. "
-               + "Повторно в течение 5 секунд — откат.\n"
-               + "Левый и правый Shift вместе — пауза."),
         ])
     }
 
@@ -126,6 +123,103 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     @objc private func toggleSwitchLayout(_ sender: NSButton) {
         settings.switchLayoutAfterReplacement = sender.state == .on
         app?.settingsDidChange()
+    }
+
+    // MARK: - Keys
+
+    private var hotkeyPopUp: NSPopUpButton!
+    private var hotkeyHint: NSTextField!
+
+    private func keysTab() -> NSView {
+        hotkeyPopUp = NSPopUpButton()
+        for style in HotkeyStyle.allCases { hotkeyPopUp.addItem(withTitle: style.title) }
+        hotkeyPopUp.selectItem(at: HotkeyStyle.allCases.firstIndex(of: settings.hotkeyStyle) ?? 0)
+        hotkeyPopUp.target = self
+        hotkeyPopUp.action = #selector(changeHotkey(_:))
+
+        let row = NSStackView(views: [NSTextField(labelWithString: "Исправить:"), hotkeyPopUp])
+        row.orientation = .horizontal
+        row.spacing = 8
+
+        hotkeyHint = hint(settings.hotkeyStyle.explanation)
+
+        return column([
+            row,
+            hotkeyHint,
+            NSBox(),
+            hint("Жест делает разное, смотря по обстановке:\n"
+               + "• есть выделенный текст — переводится всё выделение целиком;\n"
+               + "• только что была замена — откат, и слово запоминается как «не менять»;\n"
+               + "• иначе — исправляется последнее слово.\n\n"
+               + "Левый и правый Shift одновременно — пауза. Этот жест не меняется вместе "
+               + "с настройкой выше: его жмут, когда что-то пошло не так, и он должен быть "
+               + "одним и тем же всегда."),
+        ])
+    }
+
+    @objc private func changeHotkey(_ sender: NSPopUpButton) {
+        let style = HotkeyStyle.allCases[sender.indexOfSelectedItem]
+        settings.hotkeyStyle = style
+        hotkeyHint.stringValue = style.explanation
+        app?.settingsDidChange()
+    }
+
+    // MARK: - Updates
+
+    private var updateStatus: NSTextField!
+
+    private func updatesTab() -> NSView {
+        let automatic = NSButton(checkboxWithTitle: "Проверять обновления раз в неделю",
+                                 target: self, action: #selector(toggleAutoUpdates(_:)))
+        automatic.state = settings.checkUpdatesAutomatically ? .on : .off
+
+        let checkNow = NSButton(title: "Проверить сейчас", target: self, action: #selector(checkNow(_:)))
+        let openPage = NSButton(title: "Открыть страницу загрузок",
+                                target: self, action: #selector(openReleases(_:)))
+        let buttons = NSStackView(views: [checkNow, openPage])
+        buttons.orientation = .horizontal
+        buttons.spacing = 8
+
+        updateStatus = NSTextField(labelWithString: "Версия \(UpdateChecker.currentVersion)")
+
+        return column([
+            updateStatus,
+            buttons,
+            NSBox(),
+            automatic,
+            hint("Единственное место, где приложение выходит в сеть, и по умолчанию оно "
+               + "этого не делает.\n\n"
+               + "Что происходит при проверке: один запрос к странице релизов на GitHub. "
+               + "Ничего не отправляется — ни версия, ни идентификатор, ни статистика, "
+               + "запрос вообще без содержимого. Но честно назвать и обратную сторону: "
+               + "GitHub при этом видит, что с вашего адреса спросили про эту программу "
+               + "в такое-то время. Это не ничто, поэтому решаете вы, а не мы за вас.\n\n"
+               + "Кнопка «Открыть страницу загрузок» сети не требует вовсе: она просто "
+               + "открывает браузер."),
+        ])
+    }
+
+    @objc private func toggleAutoUpdates(_ sender: NSButton) {
+        settings.checkUpdatesAutomatically = sender.state == .on
+    }
+
+    @objc private func openReleases(_ sender: Any?) {
+        NSWorkspace.shared.open(UpdateChecker.releasesPage)
+    }
+
+    @objc private func checkNow(_ sender: Any?) {
+        updateStatus.stringValue = "Проверяем…"
+        UpdateChecker.check { [weak self] outcome in
+            guard let self else { return }
+            switch outcome {
+            case .upToDate(let current):
+                updateStatus.stringValue = "Установлена последняя версия (\(current))"
+            case .updateAvailable(let latest, let current):
+                updateStatus.stringValue = "Есть версия \(latest), у вас \(current)"
+            case .failed(let reason):
+                updateStatus.stringValue = "Проверить не удалось: \(reason)"
+            }
+        }
     }
 
     // MARK: - Sound
