@@ -164,7 +164,19 @@ enum VetoGate {
 
     private static func hasIdentifierShape(_ word: String) -> Bool {
         if word.contains("_") || word.contains("$") || word.contains("#") { return true }
-        if word.contains("-"), word.count > 3 { return true }
+        // A single hyphen is not kebab-case, it is Russian.
+        //
+        // «почему-то», «какие-нибудь», «из-за», «по-моему», «кто-то» — the
+        // hyphen is ordinary punctuation inside an ordinary word, and the old
+        // rule («any hyphen in a word longer than three characters») refused
+        // every one of them. Two or more hyphens still reads as an identifier,
+        // and so does a hyphen next to a digit.
+        let hyphens = word.filter { $0 == "-" }.count
+        if hyphens > 1 { return true }
+        if hyphens == 1 {
+            if word.hasPrefix("-") || word.hasSuffix("-") { return true }
+            if word.contains(where: \.isNumber) { return true }
+        }
         if word.contains("(") || word.contains(")") { return true }
         // camelCase: an uppercase letter after a lowercase one.
         var previousWasLower = false

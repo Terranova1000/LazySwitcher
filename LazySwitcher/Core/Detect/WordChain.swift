@@ -110,8 +110,23 @@ struct WordChain {
     }
 
     /// Does the reading already on screen forbid touching this word?
+    ///
+    /// Below three characters the dictionary is not evidence. It lists all 26
+    /// English letters as words, and **349 two-letter combinations** on top of
+    /// them — `aa`, `ad`, `ag`, `yt` — because SCOWL includes state codes, unit
+    /// abbreviations and the like. So "the typed reading is a real word" is true
+    /// for nearly every short string and blocks exactly the words a person
+    /// typing Russian on a Latin layout needs fixed: `yt` → «не», `nj` → «то».
+    ///
+    /// For those, the curated grammar list is the honest test. `no`, `it`, `if`
+    /// are English words in the sense that matters and stay put; `yt` and `nj`
+    /// are not, and may be carried.
+    static let dictionaryIsUnreliableUpTo = 2
+
     static func blocksSweep(_ entry: Entry) -> Bool {
-        entry.typed.count == 1 ? entry.typedIsFunctionWord : entry.evidence.typedIsKnownWord
+        entry.typed.count <= dictionaryIsUnreliableUpTo
+            ? entry.typedIsFunctionWord
+            : entry.evidence.typedIsKnownWord
     }
 
     /// Can a short word ride on the previous one's conversion?
@@ -122,7 +137,8 @@ struct WordChain {
                            isFunctionWord: Bool,
                            typedIsFunctionWord: Bool = false,
                            typedLength: Int = 0) -> Bool {
-        let blocked = typedLength == 1 ? typedIsFunctionWord : evidence.typedIsKnownWord
+        let blocked = typedLength <= dictionaryIsUnreliableUpTo
+            ? typedIsFunctionWord : evidence.typedIsKnownWord
         guard !blocked else { return false }
         return evidence.convertedIsKnownWord || isFunctionWord
     }

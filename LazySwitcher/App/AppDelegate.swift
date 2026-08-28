@@ -101,6 +101,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var settingsWindow: SettingsWindowController?
     private var onboarding: OnboardingWindowController?
     private var reportTimer: Timer?
+    private var layoutSweepTimer: Timer?
     private var permissionTimer: Timer?
 
     /// XCTest launches the app as a host for the test bundle. In that mode it
@@ -168,6 +169,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         inputSources.startWatching()
         refreshLayouts()
+
+        // Sweeps up a stuck notification expectation. Rare, cheap, and the sort
+        // of state that otherwise stays wrong for the rest of the session.
+        let sweep = Timer(timeInterval: 5, repeats: true) { [weak self] _ in
+            self?.inputSources.clearStaleExpectation()
+        }
+        RunLoop.main.add(sweep, forMode: .common)
+        layoutSweepTimer = sweep
 
         tap.onWordCommitted = { [weak self] word, terminator in
             self?.evaluate(word, terminator: terminator)
@@ -273,15 +282,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             os_unfair_lock_lock(&layoutsLock); layouts = nil; os_unfair_lock_unlock(&layoutsLock)
             return
         }
-        let others = InputSourceService.enabledKeyboardLayouts().filter {
-            InputSourceService.identifier(of: $0) != currentTable.layoutID
+        // The first *usable* other layout, not simply the first.
+        //
+        // `enabledKeyboardLayouts` returns everything selectable, including
+        // input methods that have no `UnicodeKeyLayoutData` at all. Taking
+        // `.first` and giving up if it did not work meant one unusable entry —
+        // an input method sorted ahead of the real layout — silently switched
+        // the whole app off, with nothing to say why.
+        var chosen: (source: TISInputSource, table: KeyMapper.Table, language: String)?
+        for candidate in InputSourceService.enabledKeyboardLayouts()
+        where InputSourceService.identifier(of: candidate) != currentTable.layoutID {
+            guard let language = InputSourceService.primaryLanguage(of: candidate),
+                  language != sourceLanguage,
+                  let table = keyMapper.table(for: candidate) else { continue }
+            chosen = (candidate, table, language)
+            break
         }
-        guard let other = others.first,
-              let targetLanguage = InputSourceService.primaryLanguage(of: other),
-              let otherTable = keyMapper.table(for: other) else {
+        guard let chosen else {
             os_unfair_lock_lock(&layoutsLock); layouts = nil; os_unfair_lock_unlock(&layoutsLock)
             return
         }
+        let other = chosen.source, otherTable = chosen.table, targetLanguage = chosen.language
         let pair = InputSourceService.LayoutPair(source: currentTable, target: otherTable,
                                                  sourceLanguage: sourceLanguage,
                                                  targetLanguage: targetLanguage,
@@ -460,7 +481,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self.replacementsMade.bump()
                 self.note("\(outcome.strategy.rawValue): \(from.count) → \(to.count) симв.")
                 self.chain.markConverted(count: count)
-                self.undo.arm(original: from, replacement: to, bundleID: bundleID)
+                // The generation after our own synthetic events: our marked
+                // events do not bump it, so this is still the user's last real
+                // keystroke, and any further typing will move past it.
+                self.undo.arm(original: from, replacement: to, bundleID: bundleID,
+                              generation: self.tap.inputGeneration.value)
                 if Settings.shared.switchLayoutAfterReplacement { self.inputSources.select(target) }
                 self.playFeedback()
             }
@@ -535,7 +560,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // Undo first: pressing the hotkey right after a replacement means
             // "that was wrong", not "do it again".
             guard !isPaused else { return }
-            if undo.isAvailable, let pending = undo.consume() {
+            if undo.isAvailable, let pending = undo.consume(currentGeneration: tap.inputGeneration.value) {
                 revert(pending)
                 return
             }
@@ -624,7 +649,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self.replacementsMade.bump()
                 self.note("выделение: \(selection.text.count) симв.")
                 self.tap.clearBufferAfterReplacement()
-                self.undo.arm(original: selection.text, replacement: converted, bundleID: bundleID)
+                self.undo.arm(original: selection.text, replacement: converted,
+                              bundleID: bundleID, generation: self.tap.inputGeneration.value)
                 if Settings.shared.switchLayoutAfterReplacement { self.inputSources.select(other) }
                 self.playFeedback()
             }
@@ -683,7 +709,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self.replacementsMade.bump()
                 self.note("\(outcome.strategy.rawValue): \(reading.typed.count) симв.")
                 self.tap.clearBufferAfterReplacement()
-                self.undo.arm(original: from, replacement: to, bundleID: bundleID)
+                // The generation after our own synthetic events: our marked
+                // events do not bump it, so this is still the user's last real
+                // keystroke, and any further typing will move past it.
+                self.undo.arm(original: from, replacement: to, bundleID: bundleID,
+                              generation: self.tap.inputGeneration.value)
                 // Switch the layout too, or the next word comes out wrong again
                 // and the correction was pointless.
                 if Settings.shared.switchLayoutAfterReplacement { self.inputSources.select(reading.target) }
@@ -694,6 +724,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func revert(_ pending: UndoController.Pending) {
         guard !isReplacing else { NSSound.beep(); return }
+        // Same check as `applyRun`, and for the same reason: between deciding to
+        // revert and actually posting backspaces the user may type, and the
+        // characters in front of the caret stop being the ones we put there.
+        guard tap.inputGeneration.value == pending.generation else {
+            note("откат отменён: текст изменился")
+            NSSound.beep()
+            return
+        }
         isReplacing = true
         applyQueue.async { [weak self] in
             guard let self else { return }

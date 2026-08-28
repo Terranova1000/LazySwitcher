@@ -45,39 +45,78 @@ final class UndoControllerTests: XCTestCase {
     }
 
     func testRestoresExactlyWhatWasThere() {
-        undo.arm(original: "ghbdtn ", replacement: "привет ", bundleID: "com.apple.Notes")
-        let pending = undo.consume()
+        undo.arm(original: "ghbdtn ", replacement: "привет ", bundleID: "com.apple.Notes", generation: 7)
+        let pending = undo.consume(currentGeneration: 7)
         XCTAssertEqual(pending?.original, "ghbdtn ",
                        "Откат обязан вернуть байт в байт, иначе доверять нельзя ни туда, ни обратно")
         XCTAssertEqual(pending?.replacement, "привет ")
     }
 
     func testOnlyOnce() {
-        undo.arm(original: "a", replacement: "б", bundleID: "x")
-        XCTAssertNotNil(undo.consume())
-        XCTAssertNil(undo.consume(), "Второе нажатие не должно откатывать повторно")
+        undo.arm(original: "a", replacement: "б", bundleID: "x", generation: 1)
+        XCTAssertNotNil(undo.consume(currentGeneration: 1))
+        XCTAssertNil(undo.consume(currentGeneration: 1), "Второе нажатие не должно откатывать повторно")
     }
 
     func testExpiresAfterTheWindow() {
-        undo.arm(original: "a", replacement: "б", bundleID: "x")
+        undo.arm(original: "a", replacement: "б", bundleID: "x", generation: 1)
         clock = clock.addingTimeInterval(5.1)
         XCTAssertFalse(undo.isAvailable)
-        XCTAssertNil(undo.consume())
+        XCTAssertNil(undo.consume(currentGeneration: 1))
     }
 
     func testStillAvailableJustInsideTheWindow() {
-        undo.arm(original: "a", replacement: "б", bundleID: "x")
+        undo.arm(original: "a", replacement: "б", bundleID: "x", generation: 1)
         clock = clock.addingTimeInterval(4.9)
         XCTAssertTrue(undo.isAvailable)
-        XCTAssertNotNil(undo.consume())
+        XCTAssertNotNil(undo.consume(currentGeneration: 1))
     }
 
     /// Once the caret moves, the characters in front of it are not ours any
     /// more, and undoing would eat someone else's text.
     func testCaretMovementInvalidatesIt() {
-        undo.arm(original: "a", replacement: "б", bundleID: "x")
+        undo.arm(original: "a", replacement: "б", bundleID: "x", generation: 1)
         undo.invalidate()
         XCTAssertFalse(undo.isAvailable)
-        XCTAssertNil(undo.consume())
+        XCTAssertNil(undo.consume(currentGeneration: 1))
+    }
+}
+
+
+/// The undo must not survive typing.
+///
+/// Found by reading the code, not by using it, and it is the most dangerous
+/// thing the audit turned up. After an automatic replacement the word buffer is
+/// empty, so the next letter merely extends it — no reset fires and nothing
+/// invalidates anything. The undo stayed armed for its full five seconds while
+/// the user carried on writing, and pressing the hotkey then deleted as many
+/// characters as the replacement had been, from wherever the caret now was.
+final class UndoStalenessTests: XCTestCase {
+
+    private var undo: UndoController!
+
+    override func setUp() {
+        super.setUp()
+        undo = UndoController()
+    }
+
+    func testUndoIsRefusedAfterAnythingIsTyped() {
+        undo.arm(original: "ghbdtn ", replacement: "привет ", bundleID: "x", generation: 100)
+        // Пользователь напечатал ещё что-то: поколение выросло.
+        XCTAssertNil(undo.consume(currentGeneration: 101),
+                     "Откат обязан отказаться — иначе он сотрёт только что набранное")
+    }
+
+    func testUndoWorksWhenNothingWasTyped() {
+        undo.arm(original: "ghbdtn ", replacement: "привет ", bundleID: "x", generation: 100)
+        XCTAssertNotNil(undo.consume(currentGeneration: 100))
+    }
+
+    /// And a refused undo is forgotten, not left waiting for the generation to
+    /// come back around.
+    func testARefusedUndoIsDiscarded() {
+        undo.arm(original: "a", replacement: "б", bundleID: "x", generation: 5)
+        XCTAssertNil(undo.consume(currentGeneration: 6))
+        XCTAssertNil(undo.consume(currentGeneration: 5), "Отказавший откат не должен воскресать")
     }
 }

@@ -92,6 +92,9 @@ enum M0Report {
             row("спасено цепочкой", "\(delegate.chainRescues.value)")
             row("последнее решение", delegate.lastDecisionNote)
             row("модели загружены", delegate.modelStore.loadedLanguages.joined(separator: ", "))
+            row("раскладка переключена", "\(delegate.inputSources.performedSwitches.value)")
+            row("отказов переключить", "\(delegate.inputSources.refusedSwitches.value)")
+            row("ошибок переключения", "\(delegate.inputSources.failedSwitches.value)")
             let ctx = delegate.context.current
             row("приложение", delegate.context.currentCold.appName)
             row("смен приложения поймано", "\(delegate.apps.activationsSeen)")

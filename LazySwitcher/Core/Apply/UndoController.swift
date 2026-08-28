@@ -16,6 +16,15 @@ final class UndoController {
         let replacement: String
         let bundleID: String
         let at: Date
+        /// Input generation at the moment the replacement was made.
+        ///
+        /// Without it the undo survives typing. After an automatic replacement
+        /// the word buffer is empty and the next letter merely extends it — no
+        /// reset fires, nothing invalidates anything — so the undo stayed armed
+        /// while the user carried on writing. Pressing the hotkey then deleted
+        /// as many characters as the replacement had been, from wherever the
+        /// caret now was: their own new text.
+        let generation: UInt64
     }
 
     private(set) var pending: Pending?
@@ -24,9 +33,9 @@ final class UndoController {
     /// Provided by the caller so tests need not sleep.
     var now: () -> Date = Date.init
 
-    func arm(original: String, replacement: String, bundleID: String) {
+    func arm(original: String, replacement: String, bundleID: String, generation: UInt64) {
         pending = Pending(original: original, replacement: replacement,
-                          bundleID: bundleID, at: now())
+                          bundleID: bundleID, at: now(), generation: generation)
     }
 
     var isAvailable: Bool {
@@ -34,10 +43,12 @@ final class UndoController {
         return now().timeIntervalSince(pending.at) <= window
     }
 
-    /// Returns what to undo, and forgets it. Nil if nothing is pending or the
-    /// window has closed.
-    func consume() -> Pending? {
-        guard isAvailable, let pending else {
+    /// Returns what to undo, and forgets it.
+    ///
+    /// Nil if nothing is pending, the window has closed, or anything has been
+    /// typed since — the last of those being the one that used to eat text.
+    func consume(currentGeneration: UInt64) -> Pending? {
+        guard isAvailable, let pending, pending.generation == currentGeneration else {
             self.pending = nil
             return nil
         }

@@ -32,62 +32,61 @@ func drawSloth(in size: CGFloat, context ctx: CGContext) {
     ctx.setLineCap(.round)
     ctx.setLineJoin(.round)
 
-    // Голова. Контур тонкий: при 18 точках любая лишняя обводка съедает
-    // просвет, и мордочка превращается в кляксу.
-    let head = CGRect(x: 3.0 * s, y: 4.2 * s, width: 30.0 * s, height: 27.0 * s)
+    // Голова: заметно шире, чем высокая. Ушей нет — на иконке приложения их
+    // тоже не видно, они в шерсти, а пририсованные читаются как крючки.
+    let head = CGRect(x: 1.8 * s, y: 5.6 * s, width: 32.4 * s, height: 25.2 * s)
     ctx.setLineWidth(2.0 * s)
     ctx.strokeEllipse(in: head)
 
-    // Маска ленивца: полосы от переносицы вниз и наружу, к щекам. Наклон —
-    // это то, чем ленивец отличается от панды; круглые пятна дают панду.
-    //
-    // Полосы намеренно короче и уже, чем «правильно» по рисунку: на 36
-    // пикселях (18 точек на Retina) они иначе смыкаются с контуром головы и
-    // с носом, и всё превращается в сплошное пятно. Это тот случай, когда
-    // узнаваемость определяется не сходством, а тем, что уцелеет на размере.
+    // Маска: крупные полосы от переносицы вниз и наружу, к щекам. Наклон и
+    // размер — то, по чему ленивца узнают; круглые пятна дают панду.
     for mirrored in [false, true] {
         ctx.saveGState()
-        if mirrored {
-            ctx.translateBy(x: size, y: 0)
-            ctx.scaleBy(x: -1, y: 1)
-        }
+        if mirrored { ctx.translateBy(x: size, y: 0); ctx.scaleBy(x: -1, y: 1) }
         let patch = CGMutablePath()
-        patch.move(to: p(14.8, 24.0))
-        patch.addCurve(to: p(15.4, 19.6), control1: p(15.8, 22.8), control2: p(15.8, 21.2))
-        patch.addCurve(to: p(11.6, 13.6), control1: p(15.0, 17.2), control2: p(13.6, 14.4))
-        patch.addCurve(to: p(8.6, 16.8), control1: p(10.2, 13.0), control2: p(8.8, 14.4))
-        patch.addCurve(to: p(10.0, 22.2), control1: p(8.4, 19.0), control2: p(8.8, 20.8))
-        patch.addCurve(to: p(14.8, 24.0), control1: p(11.2, 23.4), control2: p(13.2, 24.4))
+        patch.move(to: p(15.2, 25.6))
+        patch.addCurve(to: p(16.0, 21.0), control1: p(16.4, 24.6), control2: p(16.5, 22.6))
+        patch.addCurve(to: p(11.6, 14.6), control1: p(15.4, 18.4), control2: p(13.8, 15.2))
+        patch.addCurve(to: p(8.0, 18.2), control1: p(9.9, 14.0), control2: p(8.2, 15.6))
+        patch.addCurve(to: p(10.0, 23.8), control1: p(7.8, 20.6), control2: p(8.6, 22.4))
+        patch.addCurve(to: p(15.2, 25.6), control1: p(11.4, 25.0), control2: p(13.4, 26.0))
         patch.closeSubpath()
         ctx.addPath(patch)
         ctx.fillPath()
         ctx.restoreGState()
     }
 
-    // Закрытые глаза — вырез внутри полосы. Именно вырез: шаблон одноцветный,
-    // «светлого» в нём не бывает, а спящий ленивец без закрытых глаз не спящий.
+    // Закрытые глаза: дуга уголками вверх — «доволен», а не «щурится».
+    // Вырез, а не светлая линия: шаблон одноцветный.
     ctx.saveGState()
     ctx.setBlendMode(.clear)
     ctx.setLineWidth(2.3 * s)
     for mirrored in [false, true] {
         ctx.saveGState()
-        if mirrored {
-            ctx.translateBy(x: size, y: 0)
-            ctx.scaleBy(x: -1, y: 1)
-        }
+        if mirrored { ctx.translateBy(x: size, y: 0); ctx.scaleBy(x: -1, y: 1) }
         let eye = CGMutablePath()
-        eye.move(to: p(9.6, 19.8))
-        eye.addQuadCurve(to: p(14.0, 18.8), control: p(11.8, 17.0))
+        eye.move(to: p(9.4, 19.6))
+        eye.addQuadCurve(to: p(14.4, 19.6), control: p(11.9, 22.4))
         ctx.addPath(eye)
         ctx.strokePath()
         ctx.restoreGState()
     }
     ctx.restoreGState()
 
-    // Нос. Улыбки нет намеренно: под носом остаётся три-четыре пикселя до
-    // контура головы, и дуга в этом промежутке сливается с ним.
-    let nose = CGRect(x: 15.8 * s, y: 11.4 * s, width: 4.4 * s, height: 3.4 * s)
+    // Нос.
+    let nose = CGRect(x: 16.0 * s, y: 13.6 * s, width: 4.0 * s, height: 3.0 * s)
     ctx.fillEllipse(in: nose)
+
+    // Улыбка: широкая дуга уголками вверх, с просветом до контура. Ради неё
+    // голова и приплюснута — слитая с контуром улыбка читается как утолщение
+    // линии, то есть как грязь.
+    ctx.setLineWidth(1.8 * s)
+    let smile = CGMutablePath()
+    smile.move(to: p(13.2, 11.8))
+    smile.addQuadCurve(to: p(18.0, 9.4), control: p(15.4, 9.5))
+    smile.addQuadCurve(to: p(22.8, 11.8), control: p(20.6, 9.5))
+    ctx.addPath(smile)
+    ctx.strokePath()
 }
 
 // ── PDF (вектор, для каталога ассетов) ──────────────────────────────────────

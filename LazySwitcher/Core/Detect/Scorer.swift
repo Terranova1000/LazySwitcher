@@ -63,7 +63,64 @@ struct Scorer {
 
     // MARK: - Scoring
 
+    /// Hyphenated words are judged part by part.
+    ///
+    /// Hunspell dictionaries contain **no hyphenated entries at all** — they are
+    /// built from stems and affixes, and compounds are not among them. So
+    /// `почему-то` and `какие-нибудь` are unknown as wholes while every one of
+    /// their parts is known, and the model cannot even represent the hyphen, so
+    /// the whole word came back "no opinion" and stayed in Latin.
+    ///
+    /// Splitting fixes both at once: each part is scored normally, and the
+    /// verdicts are combined by the strictest reading — a word counts as known
+    /// only when every part does.
+    private static let hyphens: Set<Character> = ["-", "\u{2010}", "\u{2011}"]
+
     func evidence(typed: String, converted: String) -> Evidence {
+        if typed.contains(where: { Self.hyphens.contains($0) }) {
+            return hyphenatedEvidence(typed: typed, converted: converted)
+        }
+        return plainEvidence(typed: typed, converted: converted)
+    }
+
+    private func hyphenatedEvidence(typed: String, converted: String) -> Evidence {
+        let typedParts = typed.split(whereSeparator: { Self.hyphens.contains($0) }).map(String.init)
+        let convertedParts = converted.split(whereSeparator: { Self.hyphens.contains($0) }).map(String.init)
+
+        var evidence = Evidence()
+        evidence.length = typed.count
+
+        // A hyphen at either end, or two in a row, means the two readings do not
+        // line up part for part. Nothing to compare, so no opinion.
+        guard typedParts.count == convertedParts.count, !typedParts.isEmpty else {
+            evidence.isScorable = false
+            return evidence
+        }
+
+        var totalRatio = 0.0
+        var everyPartKnownInSource = true
+        var everyPartKnownInTarget = true
+        for (left, right) in zip(typedParts, convertedParts) {
+            let part = plainEvidence(typed: left, converted: right)
+            guard part.isScorable else {
+                evidence.isScorable = false
+                return evidence
+            }
+            totalRatio += part.logLikelihoodRatio
+            everyPartKnownInSource = everyPartKnownInSource && part.typedIsKnownWord
+            everyPartKnownInTarget = everyPartKnownInTarget && part.convertedIsKnownWord
+        }
+
+        evidence.isScorable = true
+        evidence.typedIsKnownWord = everyPartKnownInSource
+        evidence.convertedIsKnownWord = everyPartKnownInTarget
+        evidence.logLikelihoodRatio = totalRatio
+        evidence.perCharacter = totalRatio / Double(evidence.length + 1)
+        evidence.decidedByDictionary = evidence.typedIsKnownWord != evidence.convertedIsKnownWord
+        return evidence
+    }
+
+    private func plainEvidence(typed: String, converted: String) -> Evidence {
         var evidence = Evidence()
         evidence.length = typed.count
 

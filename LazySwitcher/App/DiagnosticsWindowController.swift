@@ -221,6 +221,10 @@ final class DiagnosticsWindowController: NSWindowController {
         row("замен сделано", "\(delegate?.replacementsMade.value ?? 0)")
         row("откатов", "\(delegate?.undosMade.value ?? 0)")
         row("последнее действие", delegate?.lastReplacementNote ?? "—")
+        row("раскладка: сменена / отказ / сбой",
+            "\(delegate?.inputSources.performedSwitches.value ?? 0) / "
+            + "\(delegate?.inputSources.refusedSwitches.value ?? 0) / "
+            + "\(delegate?.inputSources.failedSwitches.value ?? 0)")
         row("автозамен", "\(delegate?.automaticReplacements.value ?? 0)")
         row("последнее решение", delegate?.lastDecisionNote ?? "—")
         if let ctx = delegate?.context.current, let cold = delegate?.context.currentCold {
