@@ -51,6 +51,27 @@ final class SyntheticEventSource {
         }
     }
 
+    /// Re-posts keystrokes that were held while we were replacing.
+    ///
+    /// Unmarked on purpose: they are the user's, and both the application and
+    /// our own word buffer must treat them as such.
+    func replay(_ keys: [(keyCode: UInt16, flags: UInt64)]) {
+        guard let plain = CGEventSource(stateID: .privateState) else { return }
+        plain.localEventsSuppressionInterval = 0
+        for key in keys {
+            guard let down = CGEvent(keyboardEventSource: plain,
+                                     virtualKey: CGKeyCode(key.keyCode), keyDown: true),
+                  let up = CGEvent(keyboardEventSource: plain,
+                                   virtualKey: CGKeyCode(key.keyCode), keyDown: false)
+            else { continue }
+            down.flags = CGEventFlags(rawValue: key.flags)
+            up.flags = CGEventFlags(rawValue: key.flags)
+            down.post(tap: .cgSessionEventTap)
+            up.post(tap: .cgSessionEventTap)
+            usleep(2_000)
+        }
+    }
+
     func type(_ text: String) {
         for chunk in Self.chunks(of: text) {
             postUnicode(chunk)

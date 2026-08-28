@@ -76,6 +76,30 @@ final class KeyTapService {
     /// thread for the cost of a load, so the check is free.
     let inputGeneration = AtomicCounter()
 
+    /// Non-zero while we are posting a replacement.
+    ///
+    /// Everything the user types in that window is held, not dropped, and
+    /// replayed once we are done. Without this the two streams interleave: our
+    /// backspaces count characters that were correct when we decided and are not
+    /// by the time they land, so the deletion eats into the previous word and
+    /// the replacement is typed on top of the wreckage.
+    ///
+    /// Checking "has anything been typed" before starting is not enough, and
+    /// that was the original mistake — the check was right and the window it
+    /// guarded was the wrong one. The dangerous interval is not before the
+    /// replacement but during it.
+    let replacementInFlight = AtomicCounter()
+
+    /// Keystrokes held during a replacement, oldest first. Fixed capacity and
+    /// no allocation: this is written from the tap callback.
+    private var heldCapacity = 32
+    private var held: [(keyCode: UInt16, flags: UInt64)] = []
+    private var heldSince: UInt64 = 0
+
+    /// Replays what was held. Posted unmarked, so they reach the application and
+    /// our own buffer exactly as if they had just been pressed.
+    var onReplayHeldKeys: (([(keyCode: UInt16, flags: UInt64)]) -> Void)?
+
     private(set) var isRunning = false
 
     // MARK: - Private
@@ -221,6 +245,24 @@ final class KeyTapService {
         let secure = secureInputMirror.value != 0
         let now = mach_absolute_time()
 
+        // Hold the user's keys while our own replacement is on the wire.
+        //
+        // A hard time limit as well as a flag: if a replacement ever hangs, the
+        // keyboard must come back rather than stay swallowed. Losing a keystroke
+        // is worse than an interleaved replacement, and a stuck flag would lose
+        // all of them.
+        if replacementInFlight.value != 0, type == .keyDown || type == .keyUp {
+            let elapsed = Double(now &- heldSince) * Self.machToSeconds
+            if elapsed < 0.5 {
+                if type == .keyDown, held.count < heldCapacity {
+                    held.append((UInt16(event.getIntegerValueField(.keyboardEventKeycode)),
+                                 event.flags.rawValue))
+                }
+                return nil          // проглатываем: вернём после замены
+            }
+            replacementInFlight.value = 0
+        }
+
         switch type {
         case .keyDown:
             keyDownCount.bump()
@@ -327,6 +369,24 @@ final class KeyTapService {
     }()
 
     // MARK: - Invalidating the buffer from outside
+
+    /// Starts holding user keystrokes. Called just before we post anything.
+    func beginReplacement() {
+        heldSince = mach_absolute_time()
+        held.removeAll(keepingCapacity: true)
+        replacementInFlight.value = 1
+    }
+
+    /// Stops holding and hands back whatever arrived meanwhile.
+    func endReplacement() {
+        replacementInFlight.value = 0
+        guard !held.isEmpty else { return }
+        let pending = held
+        held.removeAll(keepingCapacity: true)
+        if let handler = onReplayHeldKeys {
+            DispatchQueue.main.async { handler(pending) }
+        }
+    }
 
     /// Changes the gesture. Hops to the tap thread: the detector belongs to it.
     func setHotkeyStyle(_ style: HotkeyStyle) {

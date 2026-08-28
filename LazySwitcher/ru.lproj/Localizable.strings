@@ -166,3 +166,4 @@ ghbdtn → привет     руддщ → hello
 "update.error.notInApplications" = "обновление работает, только когда приложение лежит в папке «Программы»";
 "update.error.ownSignature" = "не удалось прочитать собственную подпись";
 "update.error.unreadableSignature" = "у скачанного приложения нет читаемой подписи";
+"menu.status.updateAvailable" = "Есть версия %@";

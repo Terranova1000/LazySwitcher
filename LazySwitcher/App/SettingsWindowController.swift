@@ -670,6 +670,7 @@ final class SettingsWindowController: NSWindowController, NSToolbarDelegate, NSW
             case .updateAvailable(let latest, let current):
                 updateStatus.stringValue = L("settings.updates.available", latest, current)
                 installButton.isHidden = false
+                app?.menuBarController.showUpdateAvailable(version: latest)
                 show(.about)
             case .failed(let reason):
                 updateStatus.stringValue = L("settings.updates.failed", reason)

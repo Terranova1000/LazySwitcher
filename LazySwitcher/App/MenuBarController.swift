@@ -13,6 +13,7 @@ final class MenuBarController {
     private var permissions: PermissionState = .missing
     private var secureInputActive = false
     private var paused = false
+    private var updateVersion: String?
 
     init(delegate: AppDelegate) {
         target = delegate
@@ -38,15 +39,53 @@ final class MenuBarController {
 
     /// A newer version exists. Shown as a menu entry rather than a notification:
     /// a background agent that pops an alert to say hello is a nuisance.
+    /// A new version exists.
+    ///
+    /// Three signals, deliberately quiet ones. A background agent that throws a
+    /// window in front of somebody to announce an optional upgrade has misjudged
+    /// its own importance; a dot they will notice next time they look at the
+    /// menu bar has not.
     func showUpdateAvailable(version: String) {
+        updateVersion = version
+        redraw()
         guard let menu = item.menu else { return }
         let title = L("menu.update.available", version)
         if menu.items.contains(where: { $0.title == title }) { return }
-        let entry = NSMenuItem(title: title, action: #selector(AppDelegate.openReleasesPage(_:)),
+        let entry = NSMenuItem(title: title, action: #selector(AppDelegate.showAbout(_:)),
                                keyEquivalent: "")
         entry.target = target
+        // A filled dot next to it, so the menu reads as "something new" at a
+        // glance rather than only on reading.
+        entry.image = NSImage(systemSymbolName: "circle.fill", accessibilityDescription: nil)?
+            .withSymbolConfiguration(.init(pointSize: 7, weight: .bold))
         menu.insertItem(entry, at: 1)
         menu.insertItem(.separator(), at: 2)
+    }
+
+    /// Draws a small dot in the corner of the icon.
+    ///
+    /// Template images are single-colour, so the badge cannot be a different
+    /// colour — it is a dot with a gap punched around it, which reads as
+    /// separate from the drawing at any size and inverts with the menu bar like
+    /// everything else.
+    private static func badged(_ base: NSImage) -> NSImage {
+        let size = base.size
+        let result = NSImage(size: size)
+        result.lockFocus()
+        base.draw(in: NSRect(origin: .zero, size: size))
+        let radius = size.width * 0.22
+        let centre = NSPoint(x: size.width - radius * 0.85, y: size.height - radius * 0.85)
+        // Gap first, then the dot inside it.
+        NSGraphicsContext.current?.compositingOperation = .clear
+        NSBezierPath(ovalIn: NSRect(x: centre.x - radius * 1.5, y: centre.y - radius * 1.5,
+                                    width: radius * 3, height: radius * 3)).fill()
+        NSGraphicsContext.current?.compositingOperation = .sourceOver
+        NSColor.black.setFill()
+        NSBezierPath(ovalIn: NSRect(x: centre.x - radius, y: centre.y - radius,
+                                    width: radius * 2, height: radius * 2)).fill()
+        result.unlockFocus()
+        result.isTemplate = true
+        return result
     }
 
     /// Blinks the icon after a correction. The cheapest possible acknowledgement
@@ -82,7 +121,7 @@ final class MenuBarController {
             image = sloth
         }
         image?.isTemplate = true
-        item.button?.image = image
+        item.button?.image = updateVersion == nil ? image : image.map(Self.badged)
         item.menu?.item(withTag: MenuTag.status.rawValue)?.title = statusLine
     }
 
@@ -97,6 +136,7 @@ final class MenuBarController {
         // worse than no name.
         if secureInputActive { return L("menu.status.pausedSecureInput") }
         if paused { return L("menu.status.paused") }
+        if let updateVersion { return L("menu.status.updateAvailable", updateVersion) }
         return L("menu.status.active")
     }
 

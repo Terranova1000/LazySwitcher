@@ -44,6 +44,7 @@ enum M5SelfTest {
     private static var expected = "привет"
     /// Language the test wants active before it types.
     private static var startLanguage = "en"
+    private static var pressHotkey = false
 
     static func watchForTrigger(delegate: AppDelegate) {
         let timer = Timer(timeInterval: 1.0, repeats: true) { _ in
@@ -60,6 +61,8 @@ enum M5SelfTest {
                 sequence = defaultSequence
             }
             expected = parts.count > 2 ? parts[2] : "привет"
+            // Хвост «+hotkey» — нажать жест после набора, а не ждать автозамены.
+            pressHotkey = raw.contains("+hotkey")
             // Format: "bundleID lang:codes expected", lang optional.
             if let colon = parts.count > 1 ? parts[1].firstIndex(of: ":") : nil {
                 startLanguage = String(parts[1][parts[1].startIndex..<colon])
@@ -135,7 +138,14 @@ enum M5SelfTest {
                 usleep(60_000)          // как человек, а не как автомат
             }
 
-            DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
+            if pressHotkey {
+                // Тот же путь, что у настоящего жеста, без синтеза модификаторов:
+                // Secure Input и прочие условия проверяются внутри.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+                    delegate.triggerHotkeyForSelfTest()
+                }
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3.2) {
                 let text = readFocusedText()
                 lines.append("в поле:     «\(text ?? "прочитать не удалось")»")
                 lines.append("решение:    \(delegate.lastDecisionNote)")

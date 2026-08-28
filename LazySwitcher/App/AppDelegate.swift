@@ -26,6 +26,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// of events with sleeps between them and is only correct if nothing else is
     /// posting keys at the same time.
     private let applyQueue = DispatchQueue(label: "com.lazyswitcher.apply", qos: .userInitiated)
+    private let replayQueue = DispatchQueue(label: "com.lazyswitcher.replay", qos: .userInitiated)
 
     /// True while events are being posted. Anything that would start a second
     /// replacement is dropped rather than queued: by the time the first one
@@ -95,6 +96,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
     private var lastCommitted: Committed?
     private var menuBar: MenuBarController!
+    /// Read-only access for the settings window, which reports an update it
+    /// found so the menu bar can show it too.
+    var menuBarController: MenuBarController { menuBar }
     #if DEBUG
     private var diagnostics: DiagnosticsWindowController?
     #endif
@@ -182,6 +186,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.evaluate(word, terminator: terminator)
         }
         tap.onHotkey = { [weak self] event in self?.handle(hotkey: event) }
+        tap.onReplayHeldKeys = { [weak self] keys in
+            guard let self else { return }
+            replayQueue.async { self.replacer.syntheticSource?.replay(keys) }
+        }
         tap.onBufferInvalidated = { [weak self] reason in
             guard let self else { return }
             // Both the chain and the undo are claims about text sitting on
@@ -227,6 +235,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         UpdateChecker.checkOnScheduleIfEnabled { [weak self] outcome in
             guard case .updateAvailable(let latest, _) = outcome else { return }
             self?.menuBar.showUpdateAvailable(version: latest)
+        }
+        // And once, quietly, a few seconds after launch — long enough not to
+        // compete with everything else starting up. Still only when asked for.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 8) { [weak self] in
+            guard Settings.shared.checkUpdatesAutomatically else { return }
+            UpdateChecker.check { outcome in
+                guard case .updateAvailable(let latest, _) = outcome else { return }
+                self?.menuBar.showUpdateAvailable(version: latest)
+            }
         }
     }
 
@@ -497,7 +514,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 DispatchQueue.main.async { self.isReplacing = false; self.note("пропущено: текст изменился") }
                 return
             }
+            tap.beginReplacement()
             let outcome = replacer.replace(original: from, with: to, in: bundleID)
+            tap.endReplacement()
             DispatchQueue.main.async {
                 self.isReplacing = false
                 guard outcome.succeeded else { self.note("замена не удалась"); return }
@@ -665,7 +684,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             guard let self else { return }
             // A selection is already highlighted, so typing replaces it — no
             // backspaces, and nothing outside the selection can be touched.
+            tap.beginReplacement()
             let ok = TextSelection.replace(selection, with: converted, synthetic: replacer.syntheticSource)
+            tap.endReplacement()
             DispatchQueue.main.async {
                 self.isReplacing = false
                 guard ok else { self.note("не удалось заменить выделение"); return }
@@ -725,7 +746,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // ten-letter word is over a hundred milliseconds of it.
         applyQueue.async { [weak self] in
             guard let self else { return }
+            tap.beginReplacement()
             let outcome = replacer.replace(original: from, with: to, in: bundleID)
+            tap.endReplacement()
             DispatchQueue.main.async {
                 self.isReplacing = false
                 guard outcome.succeeded else { self.note("замена не удалась"); return }
@@ -758,9 +781,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         isReplacing = true
         applyQueue.async { [weak self] in
             guard let self else { return }
+            tap.beginReplacement()
             let outcome = replacer.replace(original: pending.replacement,
                                            with: pending.original,
                                            in: pending.bundleID)
+            tap.endReplacement()
             DispatchQueue.main.async {
                 self.isReplacing = false
                 guard outcome.succeeded else { self.note("откат не удался"); return }
@@ -799,6 +824,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func refreshContextForSelfTest() {
         focus.refresh(bundleID: apps.bundleID)
         publishContext(bundleID: apps.bundleID, appName: apps.appName)
+    }
+
+    /// Drives the hotkey path from the self-test, without synthesising
+    /// modifiers — the detector is exercised by its own unit tests.
+    func triggerHotkeyForSelfTest() {
+        handle(hotkey: .doubleTapShift)
     }
 
     func readingForSelfTest(keys: [KeyRecord]) -> (typed: String, alternative: String)? {
