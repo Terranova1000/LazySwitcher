@@ -245,6 +245,25 @@ final class SettingsWindowController: NSWindowController, NSToolbarDelegate, NSW
         // because the checkbox is already on. Only `tccutil reset` clears it.
         let permissions = Permissions.current(runProbe: false)
         var rows: [[NSView]] = []
+
+        // The one link somebody actually needs, and needs quickly: the pane with
+        // the checkbox. Shown whatever the state — granted, missing or stuck —
+        // because "where was that setting again" is the question people have
+        // long after the first run, and hunting for it through System Settings
+        // takes four levels of navigation.
+        let openAccess = NSButton(title: L("settings.permissions.open"), target: self,
+                                  action: #selector(openAccessibility(_:)))
+        let accessState = NSTextField(labelWithString: permissions.isUsable
+                                      ? L("settings.permissions.granted")
+                                      : L("settings.permissions.missing"))
+        accessState.font = .systemFont(ofSize: 11)
+        accessState.textColor = permissions.isUsable ? .secondaryLabelColor : .systemOrange
+        let accessBox = NSStackView(views: [openAccess, accessState])
+        accessBox.orientation = .vertical
+        accessBox.alignment = .leading
+        accessBox.spacing = 4
+        rows.append(row(L("settings.permissions.label"), accessBox))
+
         if permissions.looksStuck {
             let explain = NSTextField(wrappingLabelWithString: L("settings.permissions.stuck"))
             explain.font = .systemFont(ofSize: 11)
@@ -256,7 +275,7 @@ final class SettingsWindowController: NSWindowController, NSToolbarDelegate, NSW
             box.orientation = .vertical
             box.alignment = .leading
             box.spacing = 6
-            rows.append(row(L("settings.permissions.label"), box))
+            rows.append(row("", box))
         }
 
         rows += [
@@ -266,6 +285,10 @@ final class SettingsWindowController: NSWindowController, NSToolbarDelegate, NSW
             row("", switchLayout),
         ]
         return grid(rows)
+    }
+
+    @objc private func openAccessibility(_ sender: Any?) {
+        Permissions.openAccessibilitySettings()
     }
 
     @objc private func copyResetCommand(_ sender: Any?) {
@@ -527,9 +550,13 @@ final class SettingsWindowController: NSWindowController, NSToolbarDelegate, NSW
 
         let checkNow = NSButton(title: L("settings.updates.checkNow"), target: self,
                                 action: #selector(checkNow(_:)))
+        installButton = NSButton(title: L("settings.updates.install"), target: self,
+                                 action: #selector(installUpdate(_:)))
+        installButton.isHidden = true
+        installButton.keyEquivalent = "\r"
         let openPage = NSButton(title: L("settings.updates.openPage"), target: self,
                                 action: #selector(openReleases(_:)))
-        let buttons = NSStackView(views: [checkNow, openPage])
+        let buttons = NSStackView(views: [checkNow, installButton, openPage])
         buttons.orientation = .horizontal
         buttons.spacing = 8
 
@@ -565,6 +592,7 @@ final class SettingsWindowController: NSWindowController, NSToolbarDelegate, NSW
     }
 
     private var bannerToggleButton: NSButton?
+    private var installButton: NSButton!
 
     @objc private func toggleBanner(_ sender: Any?) {
         settings.bannerHidden.toggle()
@@ -595,6 +623,37 @@ final class SettingsWindowController: NSWindowController, NSToolbarDelegate, NSW
         NSApp.terminate(nil)
     }
 
+    @objc private func installUpdate(_ sender: Any?) {
+        installButton.isEnabled = false
+        Updater.downloadAndInstall(progress: { [weak self] step in
+            guard let self else { return }
+            switch step {
+            case .downloading:  updateStatus.stringValue = L("settings.updates.downloading")
+            case .verifying:    updateStatus.stringValue = L("settings.updates.verifying")
+            case .installing:   updateStatus.stringValue = L("settings.updates.installing")
+            case .restarting:   updateStatus.stringValue = L("settings.updates.restarting")
+            }
+        }, completion: { [weak self] result in
+            guard let self else { return }
+            switch result {
+            case .success:
+                // The helper is waiting for us to exit before it swaps the
+                // bundle, so quitting is the last step of the install.
+                NSApp.terminate(nil)
+            case .failure(let error):
+                installButton.isEnabled = true
+                let alert = NSAlert()
+                alert.alertStyle = .warning
+                alert.messageText = L("settings.updates.failedTitle")
+                alert.informativeText = error.localizedDescription
+                alert.addButton(withTitle: L("settings.updates.openPage"))
+                alert.addButton(withTitle: L("about.uninstall.cancel"))
+                if alert.runModal() == .alertFirstButtonReturn { openReleases(nil) }
+                updateStatus.stringValue = ""
+            }
+        })
+    }
+
     @objc private func toggleAutoUpdates(_ sender: NSButton) {
         settings.checkUpdatesAutomatically = sender.state == .on
     }
@@ -610,6 +669,8 @@ final class SettingsWindowController: NSWindowController, NSToolbarDelegate, NSW
                 updateStatus.stringValue = L("settings.updates.upToDate", current)
             case .updateAvailable(let latest, let current):
                 updateStatus.stringValue = L("settings.updates.available", latest, current)
+                installButton.isHidden = false
+                show(.about)
             case .failed(let reason):
                 updateStatus.stringValue = L("settings.updates.failed", reason)
             }
