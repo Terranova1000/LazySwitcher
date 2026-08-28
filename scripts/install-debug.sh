@@ -28,7 +28,12 @@ xcodebuild -project LazySwitcher.xcodeproj -scheme LazySwitcher \
 SRC="build/Build/Products/Debug/Lazy Switcher.app"
 
 # Выгружаем работающую копию, иначе перезапись повредит подпись живого процесса
-pkill -f "/Applications/Lazy Switcher (debug).app/Contents/MacOS/Lazy Switcher" 2>/dev/null || true
+# Скобки в шаблоне pkill -f — это регулярное выражение, а не литерал, поэтому
+# «(debug)» совпадает со строкой «debug» без скобок и НЕ совпадает с настоящим
+# путём. Из-за этого старый процесс переживал переустановку: бандл на диске
+# подменялся, а работал прежний бинарник со старого inode — и правки «не
+# применялись» без единого сообщения об ошибке.
+pkill -f "Lazy Switcher \\(debug\\).app/Contents/MacOS" 2>/dev/null || true
 sleep 0.5
 
 # Замена целиком, а не поверх: частично записанный бандл ломает подпись,

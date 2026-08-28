@@ -135,11 +135,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             focus.observe(pid: pid, bundleID: bundleID)
             publishContext(bundleID: bundleID, appName: name)
         }
-        focus.onFocusChanged = { [weak self] _ in
+        focus.onFocusChanged = { [weak self] _, caretMoved in
             guard let self else { return }
-            chain.clear()
-            undo.invalidate()
-            tap.invalidateBuffer(reason: .focusChanged)
+            // Only a real move invalidates what we know about the text. Learning
+            // that the field we are already in is a text field, rather than the
+            // web area we first saw, changes nothing about where the caret is.
+            if caretMoved {
+                chain.clear()
+                undo.invalidate()
+                tap.invalidateBuffer(reason: .focusChanged)
+            }
             publishContext(bundleID: apps.bundleID, appName: apps.appName)
         }
         apps.start()
@@ -376,67 +381,53 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                                    trailing: String?,
                                    generation: UInt64) {
         guard !isPaused else { return }
-        // A word the user has already rejected is not offered again. This lived
-        // only on the explicit path before, so undoing a correction stopped it
-        // once and then it came straight back on the next word.
+        // A word the user has already rejected is not offered again.
         guard !feedback.isRejected(typed) else {
             lastDecisionNote = "\(typed.count) симв.: в списке «не менять»"
             return
         }
-        let hot = context.current
         guard let sourceModel = modelStore.model(for: sourceLanguage),
               let targetModel = modelStore.model(for: targetLanguage) else {
             lastDecisionNote = "нет модели для \(sourceLanguage)→\(targetLanguage)"
             return
         }
-        let scorer = Scorer(models: .init(source: sourceModel, target: targetModel))
-        let (decision, evidence) = scorer.decide(typed: typed, converted: alternative)
 
-        // The chain is recorded whatever we decide — a word we left alone is
-        // exactly the kind the next word may rescue.
-        defer {
-            chain.append(.init(typed: typed, alternative: alternative,
-                               separator: trailing ?? "", evidence: evidence,
-                               converted: false))
-        }
+        // The decision itself lives in CorrectionPlanner, which is tested on
+        // whole sentences without a keyboard. Keeping a second copy of these
+        // rules here would mean the tested logic and the shipped logic drifting
+        // apart, and the drift would show up as "it works in the tests".
+        let planner = CorrectionPlanner(scorer: Scorer(models: .init(source: sourceModel,
+                                                                     target: targetModel)))
+        let input = CorrectionPlanner.Input(typed: typed, alternative: alternative,
+                                            sourceLanguage: sourceLanguage,
+                                            targetLanguage: targetLanguage,
+                                            minimumLength: minimumAutomaticLength)
+        let (plan, evidence, entry) = planner.plan(input, chain: chain)
 
-        guard hot.allowsAutomaticReplacement else { return }
+        defer { chain.append(entry) }
+        guard context.current.allowsAutomaticReplacement else { return }
 
-        let longEnough = typed.count >= minimumAutomaticLength
-        // A short word may still go if the one before it just went: the run is
-        // demonstrably in the wrong layout, so this is no longer a coin flip.
-        let inherits = !longEnough
-            && chain.previousWasConverted
-            && WordChain.mayInherit(evidence)
-            && decision != .keep
-
-        guard longEnough || inherits else {
-            lastDecisionNote = "\(typed.count) симв.: короче \(minimumAutomaticLength), ждём соседа"
+        switch plan {
+        case .keep, .wait:
+            lastDecisionNote = String(format: "%d симв.: %@ Λ=%.2f",
+                                      typed.count, "\(plan)", evidence.perCharacter)
             return
+        case .convert(let carrying, let reason):
+            let rescued = Array(chain.entries.suffix(carrying))
+            var from = typed + (trailing ?? "")
+            var to = alternative + (trailing ?? "")
+            for item in rescued.reversed() {
+                from = item.onScreen + item.separator + from
+                to = item.alternative + item.separator + to
+            }
+            lastDecisionNote = String(format: "%d симв.: convert (%@)%@",
+                                      typed.count, reason.rawValue,
+                                      carrying > 0 ? ", с ним \(carrying) слева" : "")
+            automaticReplacements.bump()
+            if carrying > 0 { chainRescues.bump() }
+            applyRun(from: from, to: to, target: target,
+                     marking: carrying + 1, generation: generation)
         }
-        guard decision == .convert || inherits else {
-            lastDecisionNote = String(format: "%d симв.: %@ Λ=%.2f", typed.count, "\(decision)", evidence.perCharacter)
-            return
-        }
-
-        // Now look left: short words we passed over are probably wrong too.
-        let rescued = chain.retroactiveCandidates()
-        var from = typed + (trailing ?? "")
-        var to = alternative + (trailing ?? "")
-        for entry in rescued.reversed() {
-            from = entry.onScreen + entry.separator + from
-            to = entry.alternative + entry.separator + to
-        }
-
-        lastDecisionNote = rescued.isEmpty
-            ? String(format: "%d симв.: convert Λ=%.2f%@", typed.count, evidence.perCharacter,
-                     inherits ? " (по соседу)" : "")
-            : String(format: "%d симв.: convert, с ним %d слева", typed.count, rescued.count)
-
-        automaticReplacements.bump()
-        if !rescued.isEmpty { chainRescues.bump() }
-        applyRun(from: from, to: to, target: target,
-                 marking: rescued.count + 1, generation: generation)
     }
 
     /// Replaces a run of already-typed text in one operation.

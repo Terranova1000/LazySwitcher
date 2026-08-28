@@ -37,7 +37,7 @@ final class TextReplacer {
     /// wrong — and the fallback deletes a fixed number of characters *at the
     /// caret*. Treating the second as the first is how a correction eats a
     /// neighbouring word.
-    private enum AccessibilityResult {
+    private enum AccessibilityResult: Equatable {
         case replaced
         case notSupported
         case mismatch
@@ -45,6 +45,16 @@ final class TextReplacer {
 
     private let synthetic: SyntheticEventSource?
     var syntheticSource: SyntheticEventSource? { synthetic }
+
+    /// How long to let the app finish processing the keystroke that triggered
+    /// us before looking at the text.
+    ///
+    /// We act on the space that ends a word, and many apps render it a frame or
+    /// two later — so a query made immediately sees the text without that space,
+    /// concludes the caret is one character short of where we expect, and calls
+    /// it a mismatch. The synthetic route already waited for this reason; the
+    /// accessibility route did not, and it read a field that had not caught up.
+    var settleDelay: useconds_t = 25_000
     /// Apps where the accessibility route claimed success and changed nothing.
     /// Once burned we do not try it there again this session.
     private var accessibilityFailures: Set<String> = []
@@ -59,13 +69,33 @@ final class TextReplacer {
     ///   - bundleID: the frontmost app, for remembering what works where.
     @discardableResult
     func replace(original: String, with replacement: String, in bundleID: String) -> Outcome {
+        usleep(settleDelay)
+
         if !accessibilityFailures.contains(bundleID) {
-            switch replaceViaAccessibility(original: original, with: replacement) {
+            var result = replaceViaAccessibility(original: original, with: replacement)
+            if result == .mismatch {
+                // Give it one more chance before concluding anything. A slow
+                // app and a genuinely wrong idea of the text look identical
+                // from one query, and treating a slow app as a broken one costs
+                // that app the fast route forever.
+                usleep(60_000)
+                result = replaceViaAccessibility(original: original, with: replacement)
+            }
+            switch result {
             case .replaced:
                 return Outcome(strategy: .accessibility, succeeded: true)
             case .mismatch:
-                // Refuse outright. The text is not what we believed it was, so
-                // every fallback is a guess about somebody else's characters.
+                // The app answered, but not with what we expected. Two things
+                // look like this: our picture of the text is stale, or the app
+                // counts ranges differently than we do — Electron and web views
+                // are prone to the second.
+                //
+                // We cannot tell which from here, so we do neither: skip this
+                // word, and stop trusting the accessibility route in this app.
+                // The next word goes through synthetic typing, which does not
+                // depend on the app agreeing with us about positions. One word
+                // is lost per app, once, and then it works.
+                accessibilityFailures.insert(bundleID)
                 return Outcome(strategy: .accessibility, succeeded: false)
             case .notSupported:
                 accessibilityFailures.insert(bundleID)
@@ -96,10 +126,26 @@ final class TextReplacer {
 
         var caret = CFRange()
         guard AXValueGetValue(axRange as! AXValue, .cfRange, &caret) else { return .notSupported }
+        let originalCaret = caret
+
+        /// Puts the caret back before giving up.
+        ///
+        /// Every early exit past this point has already changed the selection,
+        /// and leaving it changed is not a cosmetic problem: the user sees their
+        /// word highlighted and nothing else happen, and their next keystroke
+        /// replaces the highlighted word instead of continuing the sentence.
+        /// This was reported as "the words just get selected and that is all",
+        /// and it was correct.
+        func giveUp(_ result: AccessibilityResult) -> AccessibilityResult {
+            var restore = originalCaret
+            if let value = AXValueCreate(.cfRange, &restore) {
+                AXUIElementSetAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, value)
+            }
+            return result
+        }
 
         let length = (original as NSString).length
-        // Not enough text in front of the caret to be what we think it is. The
-        // app reports a position we cannot reconcile, so nobody should type here.
+        // Not enough text in front of the caret to be what we think it is.
         guard caret.location >= length else { return .mismatch }
 
         // Select exactly the word, then write over the selection.
@@ -111,22 +157,20 @@ final class TextReplacer {
         guard let selection = AXValueCreate(.cfRange, &wordRange) else { return .notSupported }
         guard AXUIElementSetAttributeValue(element, kAXSelectedTextRangeAttribute as CFString,
                                            selection) == .success
-        else { return .notSupported }
+        else { return giveUp(.notSupported) }
 
-        // Verify we actually selected what we meant to. Without this check a
-        // stale caret position silently overwrites the wrong characters.
+        // Verify we actually selected what we meant to. Without this a stale
+        // caret position silently overwrites the wrong characters.
         var selectedValue: CFTypeRef?
         guard AXUIElementCopyAttributeValue(element, kAXSelectedTextAttribute as CFString,
                                             &selectedValue) == .success,
               let selected = selectedValue as? String
-        else { return .notSupported }
-        // Selected something, but not what we meant to. Our model of the text is
-        // wrong; stop here rather than fall through to counting backspaces.
-        guard selected == original else { return .mismatch }
+        else { return giveUp(.notSupported) }
+        guard selected == original else { return giveUp(.mismatch) }
 
         guard AXUIElementSetAttributeValue(element, kAXSelectedTextAttribute as CFString,
                                            replacement as CFTypeRef) == .success
-        else { return .notSupported }
+        else { return giveUp(.notSupported) }
 
         // "Success" from AX means the message was accepted, not that anything
         // changed — browsers in particular accept and ignore. Read it back.
@@ -138,7 +182,7 @@ final class TextReplacer {
               AXUIElementCopyAttributeValue(element, kAXSelectedTextAttribute as CFString,
                                             &afterValue) == .success,
               let after = afterValue as? String, after == replacement
-        else { return .notSupported }
+        else { return giveUp(.notSupported) }
 
         // Collapse the selection so the caret sits after the word, as if typed.
         var collapsed = CFRange(location: afterRange.location + afterRange.length, length: 0)

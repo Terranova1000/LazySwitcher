@@ -35,11 +35,15 @@ final class FocusMonitor {
     struct Observation { let app: String; let role: String; let subrole: String; let verdict: FieldRole }
     private(set) var history: [Observation] = []
 
-    /// Called on the main thread whenever the focused element changes.
-    var onFocusChanged: ((FieldRole) -> Void)?
+    /// Called when the focused element changes, or when we learn something new
+    /// about the one we are already in. `moved` distinguishes the two: only the
+    /// first means the caret went somewhere else.
+    var onFocusChanged: ((FieldRole, Bool) -> Void)?
 
     private var observer: AXObserver?
     private var observedElement: AXUIElement?
+    /// The element the caret is actually in, as opposed to what we know about it.
+    private var focusedElement: AXUIElement?
     private var observedPID: pid_t = 0
 
     /// Apps whose text fields we classify by app rather than by AX role.
@@ -113,6 +117,7 @@ final class FocusMonitor {
         observer = nil
         observedElement = nil
         observedPID = 0
+        focusedElement = nil
         // Bumping the generation orphans any ladder still in flight.
         wakeGeneration &+= 1
         isWaking = false
@@ -125,17 +130,17 @@ final class FocusMonitor {
         let id = bundleID ?? NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? ""
 
         // App-level classification first: it is certain, and it is cheap.
-        if terminalBundleIDs.contains(id) { publish(.terminal); return }
-        if editorBundleIDs.contains(id) { publish(.code); return }
+        if terminalBundleIDs.contains(id) { publish(.terminal, element: nil); return }
+        if editorBundleIDs.contains(id) { publish(.code, element: nil); return }
 
-        guard let app = observedElement else { publish(.unknown); return }
+        guard let app = observedElement else { publish(.unknown, element: nil); return }
 
         var focused: CFTypeRef?
         let status = AXUIElementCopyAttributeValue(app, kAXFocusedUIElementAttribute as CFString, &focused)
         guard status == .success, let element = focused else {
             lastError = Self.describe(status)
             lastRole = "—"; lastSubrole = "—"
-            publish(.unknown)
+            publish(.unknown, element: nil)
             scheduleWakeRetry(bundleID: id)
             return
         }
@@ -168,7 +173,7 @@ final class FocusMonitor {
         lastSubrole = subrole ?? "—"
 
         let classified = Self.classify(role: role, subrole: subrole)
-        publish(classified)
+        publish(classified, element: target)
         if classified == .unknown { scheduleWakeRetry(bundleID: id) }
     }
 
@@ -282,15 +287,36 @@ final class FocusMonitor {
         }
     }
 
-    private func publish(_ role: FieldRole) {
+    private func publish(_ role: FieldRole, element: AXUIElement? = nil) {
         let app = NSWorkspace.shared.frontmostApplication?.localizedName ?? "—"
         let entry = Observation(app: app, role: lastRole, subrole: lastSubrole, verdict: role)
         if history.last.map({ $0.app != entry.app || $0.role != entry.role || $0.verdict != entry.verdict }) ?? true {
             history.append(entry)
             if history.count > 24 { history.removeFirst() }
         }
-        guard role != fieldRole else { return }
+
+        // Did the caret move, or did we merely learn more about where it already
+        // was?
+        //
+        // These are different questions and they used to share an answer. Safari
+        // reports `AXWebArea` first and the real `AXTextField` a moment later, so
+        // the role changes twice for one element — and every listener treating
+        // that as a focus change threw away the word history each time. The
+        // effect was that a run of short words could never accumulate: the
+        // previous word was gone before the next one arrived.
+        let moved = !Self.sameElement(focusedElement, element)
+        let roleChanged = role != fieldRole
+        focusedElement = element
         fieldRole = role
-        onFocusChanged?(role)
+        guard moved || roleChanged else { return }
+        onFocusChanged?(role, moved)
+    }
+
+    private static func sameElement(_ a: AXUIElement?, _ b: AXUIElement?) -> Bool {
+        switch (a, b) {
+        case (nil, nil): return true
+        case let (x?, y?): return CFEqual(x, y)
+        default: return false
+        }
     }
 }

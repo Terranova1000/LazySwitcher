@@ -27,8 +27,9 @@ final class SyntheticEventSource {
     var backspaceDelay: useconds_t = 3_000
     var typingDelay: useconds_t = 4_000
     /// Many apps process text asynchronously, so the first backspace must not
-    /// arrive on the heels of the keystroke that triggered us.
-    var leadInDelay: useconds_t = 15_000
+    /// arrive on the heels of the keystroke that triggered us. `TextReplacer`
+    /// waits for that already, so this is only the margin on top.
+    var leadInDelay: useconds_t = 8_000
 
     init?() {
         guard let source = CGEventSource(stateID: .privateState) else { return nil }
