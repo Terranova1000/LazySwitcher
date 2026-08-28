@@ -232,13 +232,48 @@ enum Updater {
         let script = FileManager.default.temporaryDirectory
             .appendingPathComponent("lazyswitcher-update.sh")
 
-        let body = """
+        let body = handOffScript(destination: destination, staged: staged, backup: backup,
+                                 pid: ProcessInfo.processInfo.processIdentifier)
+        do {
+            try body.write(to: script, atomically: true, encoding: .utf8)
+            try FileManager.default.setAttributes([.posixPermissions: 0o755],
+                                                  ofItemAtPath: script.path)
+        } catch { return .failure(.install(error.localizedDescription)) }
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/bash")
+        process.arguments = [script.path]
+        do { try process.run() } catch { return .failure(.install(error.localizedDescription)) }
+        return .success(())
+    }
+
+    /// The swap itself, as a script.
+    ///
+    /// Separated out so it can be run against dummy bundles in a test. This is
+    /// the one part of updating that deletes something, and "it looked right"
+    /// is not an acceptable standard for code that removes an application from
+    /// somebody's machine.
+    static func handOffScript(destination: URL, staged: URL, backup: URL, pid: Int32) -> String {
+        """
         #!/bin/bash
         # Ждём, пока приложение закроется, и только потом трогаем бандл.
+        #
+        # ps, а не kill -0: последний возвращает ошибку и когда процесс жив, но
+        # сигналить ему нельзя, — а цикл принимал это за «вышел» и начинал
+        # подменять бандл под работающим приложением.
+        #
+        # И если оно не закрылось за десять секунд, мы НЕ продолжаем. Раньше
+        # ожидание просто заканчивалось и замена шла всё равно; замена бандла
+        # под живым процессом — это ровно то, чего вся эта возня должна избежать.
+        alive=1
         for _ in $(seq 1 100); do
-          kill -0 \(ProcessInfo.processInfo.processIdentifier) 2>/dev/null || break
+          if ! ps -p \(pid) > /dev/null 2>&1; then alive=0; break; fi
           sleep 0.1
         done
+        if [ "$alive" = "1" ]; then
+          echo "приложение не закрылось — обновление отменено" >&2
+          exit 1
+        fi
         rm -rf "\(backup.path)"
         mv "\(destination.path)" "\(backup.path)" || exit 1
         if mv "\(staged.path)" "\(destination.path)"; then
@@ -251,17 +286,6 @@ enum Updater {
         open "\(destination.path)"
         rm -f "$0"
         """
-        do {
-            try body.write(to: script, atomically: true, encoding: .utf8)
-            try FileManager.default.setAttributes([.posixPermissions: 0o755],
-                                                  ofItemAtPath: script.path)
-        } catch { return .failure(.install(error.localizedDescription)) }
-
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/bin/bash")
-        process.arguments = [script.path]
-        do { try process.run() } catch { return .failure(.install(error.localizedDescription)) }
-        return .success(())
     }
 
     private static func run(_ tool: String, _ arguments: [String]) -> (status: Int32, output: String) {
