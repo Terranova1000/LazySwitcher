@@ -44,31 +44,19 @@ final class SyntheticEventSource {
 
     func sendBackspaces(_ count: Int) {
         guard count > 0 else { return }
+        // Long runs need more room between events.
+        //
+        // Measured: fourteen backspaces at three milliseconds lost one of them,
+        // and the loss is silent — the replacement then lands one character
+        // short and the survivor sits at the front of the word, which is exactly
+        // what «ппривет» is. Seven at the same spacing were fine. Applications
+        // drop what they cannot keep up with, and the longer the burst the more
+        // likely that becomes, so the spacing grows with the run.
+        let spacing = count > 8 ? backspaceDelay * 2 : backspaceDelay
         for _ in 0..<count {
             post(virtualKey: Self.backspaceKeyCode, keyDown: true)
             post(virtualKey: Self.backspaceKeyCode, keyDown: false)
-            usleep(backspaceDelay)
-        }
-    }
-
-    /// Re-posts keystrokes that were held while we were replacing.
-    ///
-    /// Unmarked on purpose: they are the user's, and both the application and
-    /// our own word buffer must treat them as such.
-    func replay(_ keys: [(keyCode: UInt16, flags: UInt64)]) {
-        guard let plain = CGEventSource(stateID: .privateState) else { return }
-        plain.localEventsSuppressionInterval = 0
-        for key in keys {
-            guard let down = CGEvent(keyboardEventSource: plain,
-                                     virtualKey: CGKeyCode(key.keyCode), keyDown: true),
-                  let up = CGEvent(keyboardEventSource: plain,
-                                   virtualKey: CGKeyCode(key.keyCode), keyDown: false)
-            else { continue }
-            down.flags = CGEventFlags(rawValue: key.flags)
-            up.flags = CGEventFlags(rawValue: key.flags)
-            down.post(tap: .cgSessionEventTap)
-            up.post(tap: .cgSessionEventTap)
-            usleep(2_000)
+            usleep(spacing)
         }
     }
 
@@ -103,9 +91,19 @@ final class SyntheticEventSource {
         else { return }
         down.flags = []
         up.flags = []
+        // The payload goes on the key-down only.
+        //
+        // Putting it on the key-up as well is the common recipe and it is wrong
+        // for the same reason a doubled keystroke is wrong: an application that
+        // inserts text on both events inserts it twice. That is where the
+        // duplicated word came from — two replacements produced three copies,
+        // and the arithmetic never worked out until this was the explanation
+        // left standing.
+        //
+        // The key-up is still posted, with no payload: applications track key
+        // state, and a down without an up leaves them believing a key is held.
         units.withUnsafeBufferPointer { buffer in
             down.keyboardSetUnicodeString(stringLength: buffer.count, unicodeString: buffer.baseAddress)
-            up.keyboardSetUnicodeString(stringLength: buffer.count, unicodeString: buffer.baseAddress)
         }
         down.post(tap: .cgSessionEventTap)
         up.post(tap: .cgSessionEventTap)

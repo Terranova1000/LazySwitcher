@@ -46,6 +46,19 @@ final class TextReplacer {
     private let synthetic: SyntheticEventSource?
     var syntheticSource: SyntheticEventSource? { synthetic }
 
+    /// Last few replacements: strategy, lengths, verdict. Lengths only — no
+    /// text, ever (rule 1). Kept because the one thing that made the duplicated
+    /// word tractable was seeing «ax:mismatch 7→7 | synth 14→14» written down;
+    /// every hypothesis before that was guesswork.
+    private(set) var history: [String] = []
+    func clearHistory() { history.removeAll() }
+    /// Why the last accessibility attempt gave up. Diagnostics only.
+    private(set) var lastAXReason = "—"
+    private func log(_ line: String) {
+        history.append(line)
+        if history.count > 12 { history.removeFirst() }
+    }
+
     /// How long to let the app finish processing the keystroke that triggered
     /// us before looking at the text.
     ///
@@ -81,6 +94,7 @@ final class TextReplacer {
                 usleep(60_000)
                 result = replaceViaAccessibility(original: original, with: replacement)
             }
+            log("ax:\(result)[\(lastAXReason)] \(original.count)→\(replacement.count)")
             switch result {
             case .replaced:
                 return Outcome(strategy: .accessibility, succeeded: true)
@@ -105,6 +119,7 @@ final class TextReplacer {
         guard let synthetic else { return Outcome(strategy: .synthetic, succeeded: false) }
         // Count characters, not UTF-16 units: one backspace removes one glyph,
         // and counting units would over-delete anything outside the BMP.
+        log("synth \(original.count)→\(replacement.count)")
         synthetic.replace(deleting: original.count, with: replacement)
         return Outcome(strategy: .synthetic, succeeded: true)
     }
@@ -136,7 +151,8 @@ final class TextReplacer {
         /// replaces the highlighted word instead of continuing the sentence.
         /// This was reported as "the words just get selected and that is all",
         /// and it was correct.
-        func giveUp(_ result: AccessibilityResult) -> AccessibilityResult {
+        func giveUp(_ result: AccessibilityResult, _ why: String) -> AccessibilityResult {
+            lastAXReason = why
             var restore = originalCaret
             if let value = AXValueCreate(.cfRange, &restore) {
                 AXUIElementSetAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, value)
@@ -144,9 +160,29 @@ final class TextReplacer {
             return result
         }
 
-        let length = (original as NSString).length
-        // Not enough text in front of the caret to be what we think it is.
-        guard caret.location >= length else { return .mismatch }
+        var length = (original as NSString).length
+
+        // Not enough text in front of the caret. Usually this is not a wrong
+        // idea of the text but a slow one: we act on the space that ends a word,
+        // and the application has not finished inserting it, so the caret sits
+        // one character short of where it will be a moment from now.
+        //
+        // Worth waiting for rather than giving up on. Giving up meant the word
+        // was left alone, and then the next word's chain rebuilt both of them in
+        // one long run of backspaces — which is where the duplicated letter came
+        // from. One short wait here removes the cause instead of the symptom.
+        if caret.location < length {
+            usleep(30_000)
+            var retryValue: CFTypeRef?
+            guard AXUIElementCopyAttributeValue(element, kAXSelectedTextRangeAttribute as CFString,
+                                                &retryValue) == .success,
+                  let retryRange = retryValue, CFGetTypeID(retryRange) == AXValueGetTypeID(),
+                  AXValueGetValue(retryRange as! AXValue, .cfRange, &caret),
+                  caret.location >= length
+            else { lastAXReason = "каретка на \(caret.location), нужно \(length)"; return .mismatch }
+        }
+        _ = length
+        length = (original as NSString).length
 
         // Select exactly the word, then write over the selection.
         //
@@ -157,7 +193,7 @@ final class TextReplacer {
         guard let selection = AXValueCreate(.cfRange, &wordRange) else { return .notSupported }
         guard AXUIElementSetAttributeValue(element, kAXSelectedTextRangeAttribute as CFString,
                                            selection) == .success
-        else { return giveUp(.notSupported) }
+        else { return giveUp(.notSupported, "нет поддержки") }
 
         // Verify we actually selected what we meant to. Without this a stale
         // caret position silently overwrites the wrong characters.
@@ -165,15 +201,29 @@ final class TextReplacer {
         guard AXUIElementCopyAttributeValue(element, kAXSelectedTextAttribute as CFString,
                                             &selectedValue) == .success,
               let selected = selectedValue as? String
-        else { return giveUp(.notSupported) }
-        guard selected == original else { return giveUp(.mismatch) }
+        else { return giveUp(.notSupported, "нет поддержки") }
+        guard selected == original else { return giveUp(.mismatch, "выделилось не то: \(selected.count) симв. вместо \(original.count)") }
 
+        // The last point at which nothing has been written yet. A failure here
+        // is genuinely "this app does not support it", and falling through to
+        // synthetic typing is correct.
         guard AXUIElementSetAttributeValue(element, kAXSelectedTextAttribute as CFString,
                                            replacement as CFTypeRef) == .success
-        else { return giveUp(.notSupported) }
+        else { return giveUp(.notSupported, "нет поддержки") }
 
+        // Past this line the text has been written. Whatever happens next, the
+        // one thing we must not report is `.notSupported` — that sends the
+        // caller on to the synthetic route, which deletes and types **again**.
+        //
+        // That is where the duplicated word came from: two replacements of seven
+        // characters on a field of fourteen produced twenty-one. The read-back
+        // below failed, we called it "not supported", and the fallback typed the
+        // word a second time on top of the one already there.
+        //
         // "Success" from AX means the message was accepted, not that anything
-        // changed — browsers in particular accept and ignore. Read it back.
+        // changed — browsers in particular accept and ignore — so the read-back
+        // stays. Only its failure verdict changes: `.mismatch`, which stops
+        // everything, rather than `.notSupported`, which starts something else.
         var afterValue: CFTypeRef?
         var afterRange = CFRange(location: wordRange.location, length: (replacement as NSString).length)
         guard let afterSelection = AXValueCreate(.cfRange, &afterRange),
@@ -181,8 +231,13 @@ final class TextReplacer {
                                            afterSelection) == .success,
               AXUIElementCopyAttributeValue(element, kAXSelectedTextAttribute as CFString,
                                             &afterValue) == .success,
-              let after = afterValue as? String, after == replacement
-        else { return giveUp(.notSupported) }
+              let after = afterValue as? String
+        else { return giveUp(.mismatch, "не прочиталось после записи") }
+
+        // Read back what we asked for: the write worked, the app simply has not
+        // told us so in a way we can confirm. Treat it as done rather than doing
+        // it twice.
+        guard after == replacement else { return giveUp(.mismatch, "после записи не то: \(after.count) вместо \(replacement.count)") }
 
         // Collapse the selection so the caret sits after the word, as if typed.
         var collapsed = CFRange(location: afterRange.location + afterRange.length, length: 0)

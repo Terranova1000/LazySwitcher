@@ -44,6 +44,9 @@ enum M5SelfTest {
     private static var expected = "привет"
     /// Language the test wants active before it types.
     private static var startLanguage = "en"
+    /// Milliseconds between keystrokes. 60 ms is about 200 words a minute —
+    /// faster than almost anybody types, and useful precisely for that reason.
+    private static var keyInterval = 60
     private static var pressHotkey = false
 
     static func watchForTrigger(delegate: AppDelegate) {
@@ -63,6 +66,11 @@ enum M5SelfTest {
             expected = parts.count > 2 ? parts[2] : "привет"
             // Хвост «+hotkey» — нажать жест после набора, а не ждать автозамены.
             pressHotkey = raw.contains("+hotkey")
+            if let range = raw.range(of: #"@(\d+)"#, options: .regularExpression) {
+                keyInterval = Int(raw[range].dropFirst()) ?? 60
+            } else {
+                keyInterval = 60
+            }
             // Format: "bundleID lang:codes expected", lang optional.
             if let colon = parts.count > 1 ? parts[1].firstIndex(of: ":") : nil {
                 startLanguage = String(parts[1][parts[1].startIndex..<colon])
@@ -119,6 +127,17 @@ enum M5SelfTest {
                        + "(\(InputSourceService.primaryLanguage(of: current) ?? "?"))")
         }
 
+        // Чистим поле перед набором.
+        //
+        // Без этого Safari восстанавливает прежнее содержимое, остатки от
+        // предыдущего прогона приклеиваются к результату, и разбор превращается
+        // в угадывание: «прпривет как» выглядит дефектом замены, а на деле это
+        // верный результат с двумя чужими буквами впереди.
+        delegate.replacer.clearHistory()
+        clearFocusedField()
+        Thread.sleep(forTimeInterval: 0.3)
+        lines.append("поле очищено: «\(readFocusedText() ?? "?")»")
+
         let before = delegate.automaticReplacements.value
 
         // A source with no userData, so our own tap treats these as real keys.
@@ -135,7 +154,7 @@ enum M5SelfTest {
                         event.post(tap: .cgSessionEventTap)
                     }
                 }
-                usleep(60_000)          // как человек, а не как автомат
+                usleep(useconds_t(keyInterval) * 1000)
             }
 
             if pressHotkey {
@@ -151,6 +170,7 @@ enum M5SelfTest {
                 lines.append("решение:    \(delegate.lastDecisionNote)")
                 lines.append("действие:   \(delegate.lastReplacementNote)")
                 lines.append("автозамен:  \(before) → \(delegate.automaticReplacements.value)")
+                lines.append("история:    \(delegate.replacer.history.joined(separator: " | "))")
                 if let now = InputSourceService.currentLayout() {
                     lines.append("раскладка после: \(InputSourceService.localizedName(of: now) ?? "—") "
                                + "(\(InputSourceService.primaryLanguage(of: now) ?? "?"))")
@@ -172,6 +192,18 @@ enum M5SelfTest {
     private static func write(_ lines: [String]) {
         try? (lines.joined(separator: "\n") + "\n")
             .write(to: resultsURL, atomically: true, encoding: .utf8)
+    }
+
+    private static func clearFocusedField() {
+        guard let pid = NSWorkspace.shared.frontmostApplication?.processIdentifier else { return }
+        let app = AXUIElementCreateApplication(pid)
+        AXUIElementSetMessagingTimeout(app, 0.3)
+        var focused: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(app, kAXFocusedUIElementAttribute as CFString,
+                                            &focused) == .success, let element = focused
+        else { return }
+        AXUIElementSetAttributeValue(element as! AXUIElement, kAXValueAttribute as CFString,
+                                     "" as CFTypeRef)
     }
 
     private static func readFocusedText() -> String? {

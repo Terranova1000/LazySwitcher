@@ -89,6 +89,8 @@ enum M0Report {
             row("откатов", "\(delegate.undosMade.value)")
             row("последнее действие", delegate.lastReplacementNote)
             row("автозамен", "\(delegate.automaticReplacements.value)")
+            row("своих событий отброшено", "\(delegate.tap.ownEventsDiscarded.value)")
+            row("история замен", delegate.replacer.history.joined(separator: " | "))
             row("спасено цепочкой", "\(delegate.chainRescues.value)")
             row("последнее решение", delegate.lastDecisionNote)
             row("модели загружены", delegate.modelStore.loadedLanguages.joined(separator: ", "))
