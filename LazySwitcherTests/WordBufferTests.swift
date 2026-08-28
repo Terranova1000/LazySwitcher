@@ -76,8 +76,17 @@ final class WordBufferTests: XCTestCase {
         XCTAssertEqual(buffer.currentWord.map(\.keyCode), [VK.g])
     }
 
-    func testBackspaceOnEmptyBufferIsHarmless() {
-        XCTAssertEqual(buffer.append(KeyRecord(keyCode: VK.backspace), hasCommandControlOrOption: false), .ignored)
+    /// Backspace on an empty buffer is not harmless, and calling it that was a
+    /// defect.
+    ///
+    /// It deletes something we are not tracking — the space before the word, or
+    /// the tail of a word already committed. Reporting `.ignored` left the chain
+    /// believing those words still sat where it had left them, so a later
+    /// replacement could reach across the gap and delete text nobody had looked
+    /// at. It is a reset, and everything downstream needs to hear about it.
+    func testBackspaceOnEmptyBufferIsAReset() {
+        XCTAssertEqual(buffer.append(KeyRecord(keyCode: VK.backspace), hasCommandControlOrOption: false),
+                       .reset(.caretMoved))
         XCTAssertTrue(buffer.isEmpty)
     }
 
@@ -115,7 +124,10 @@ final class WordBufferTests: XCTestCase {
     func testOverflowDropsTheWholeWordRatherThanItsStart() {
         type(Array(repeating: VK.g, count: WordBuffer.capacity))
         XCTAssertEqual(buffer.keyCount, WordBuffer.capacity)
-        XCTAssertEqual(buffer.append(KeyRecord(keyCode: VK.h), hasCommandControlOrOption: false), .ignored)
+        // A reset, not `.ignored`: the chain has to learn that an unknown number
+        // of characters now sits between the previous words and the caret.
+        XCTAssertEqual(buffer.append(KeyRecord(keyCode: VK.h), hasCommandControlOrOption: false),
+                       .reset(.wordCommitted))
         XCTAssertTrue(buffer.isEmpty, "Обрезать начало значило бы молча испортить слово")
     }
 }
@@ -199,5 +211,44 @@ final class JustCommittedTests: XCTestCase {
     func testReturnIsRecordedAsTerminatorButIsTheCallersProblem() {
         press(VK.g); press(VK.ret)
         XCTAssertEqual(buffer.justCommitted?.terminator, VK.ret)
+    }
+}
+
+
+/// Keys that change the screen without our seeing them properly.
+final class BufferSynchronisationTests: XCTestCase {
+
+    private enum VK {
+        static let g: UInt16 = 0x05, backspace: UInt16 = 0x33
+        static let f1: UInt16 = 0x7A, capsLock: UInt16 = 0x39, fn: UInt16 = 0x3F
+    }
+
+    /// Function keys put nothing on screen. Letting them into a word meant
+    /// `render` asked the layout for a character anyway and could get a control
+    /// code — which then went into the replacement as a character that had never
+    /// been typed.
+    func testNonPrintingKeysStayOutOfTheWord() {
+        let buffer = WordBuffer()
+        _ = buffer.append(KeyRecord(keyCode: VK.g), hasCommandControlOrOption: false)
+        for key in [VK.f1, VK.capsLock, VK.fn] {
+            XCTAssertEqual(buffer.append(KeyRecord(keyCode: key), hasCommandControlOrOption: false),
+                           .ignored, "Клавиша \(key) ничего не печатает и в слово попадать не должна")
+        }
+        XCTAssertEqual(buffer.keyCount, 1)
+    }
+
+    /// Caps Lock has to travel with the keystroke.
+    ///
+    /// Without it the rendered word came out lower-case while the screen showed
+    /// upper-case. The accessibility route then selected the right range,
+    /// compared it against the wrong string, called it a mismatch — and marked
+    /// the entire application as one where accessibility does not work, for the
+    /// rest of the session.
+    func testCapsLockIsRecorded() {
+        let plain = KeyRecord(keyCode: VK.g)
+        let capsed = KeyRecord(keyCode: VK.g, capsLock: true)
+        XCTAssertFalse(plain.capsLock)
+        XCTAssertTrue(capsed.capsLock)
+        XCTAssertNotEqual(plain, capsed, "Записи должны различаться, иначе состояние теряется")
     }
 }

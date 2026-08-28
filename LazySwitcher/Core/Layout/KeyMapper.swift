@@ -81,7 +81,16 @@ final class KeyMapper {
         var out = ""
         out.reserveCapacity(keys.count)
         for key in keys {
-            guard let ch = table.character(keyCode: key.keyCode, shift: key.shift, option: key.option) else {
+            // Caps Lock inverts Shift, but only for letters: it turns `a` into
+            // `A` and leaves `,` alone. So the decision is made per key, from
+            // what that key produces unshifted, rather than once for the word.
+            var shift = key.shift
+            if key.capsLock,
+               let plain = table.character(keyCode: key.keyCode, shift: false, option: key.option),
+               plain.first?.isLetter == true {
+                shift.toggle()
+            }
+            guard let ch = table.character(keyCode: key.keyCode, shift: shift, option: key.option) else {
                 return nil
             }
             out += ch

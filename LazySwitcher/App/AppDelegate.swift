@@ -182,13 +182,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.evaluate(word, terminator: terminator)
         }
         tap.onHotkey = { [weak self] event in self?.handle(hotkey: event) }
-        tap.onBufferInvalidated = { [weak self] _ in
+        tap.onBufferInvalidated = { [weak self] reason in
+            guard let self else { return }
             // Both the chain and the undo are claims about text sitting on
             // screen in a known place. Once the caret has moved — a click, a
             // focus change, an app switch, an arrow key — they are claims about
             // nothing, and acting on them deletes whatever is there instead.
-            self?.chain.clear()
-            self?.undo.invalidate()
+            //
+            // With one exception: the reset we perform ourselves right after a
+            // replacement. That one arrives through the same channel, on the
+            // main queue, a moment after `undo.arm` — so the undo was armed and
+            // then immediately destroyed by our own housekeeping. The hotkey's
+            // undo has therefore never worked, for as long as it has existed.
+            guard reason != .replacementApplied else { chain.clear(); return }
+            chain.clear()
+            undo.invalidate()
         }
 
         startTapOrExplain()
@@ -401,15 +409,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                                    target: TISInputSource,
                                    trailing: String?,
                                    generation: UInt64) {
-        guard !isPaused else { return }
-        // A word the user has already rejected is not offered again.
+        // Any early exit still has to record the word.
+        //
+        // The chain is a claim that these words sit next to each other on
+        // screen. A word skipped here is still on screen, so leaving it out
+        // punches a hole: the next replacement would then reach across it and
+        // delete a run that includes text nobody looked at.
+        func remember(_ blocked: String) {
+            chain.append(.init(typed: typed, alternative: alternative,
+                               convertedIsFunctionWord: false, typedIsFunctionWord: false,
+                               separator: trailing ?? "", evidence: Scorer.Evidence(),
+                               converted: false))
+            lastDecisionNote = blocked
+        }
+
+        guard !isPaused else { remember("на паузе"); return }
         guard !feedback.isRejected(typed) else {
-            lastDecisionNote = "\(typed.count) симв.: в списке «не менять»"
+            remember("\(typed.count) симв.: в списке «не менять»")
             return
         }
         guard let sourceModel = modelStore.model(for: sourceLanguage),
               let targetModel = modelStore.model(for: targetLanguage) else {
-            lastDecisionNote = "нет модели для \(sourceLanguage)→\(targetLanguage)"
+            remember("нет модели для \(sourceLanguage)→\(targetLanguage)")
             return
         }
 
@@ -446,8 +467,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                                       carrying > 0 ? ", с ним \(carrying) слева" : "")
             automaticReplacements.bump()
             if carrying > 0 { chainRescues.bump() }
-            applyRun(from: from, to: to, target: target,
-                     marking: carrying + 1, generation: generation)
+            // +1 because the current word is appended by the `defer` below, so
+            // by the time the replacement finishes the run ends one past here.
+            applyRun(from: from, to: to, target: target, marking: carrying + 1,
+                     endingAt: chain.recordedCount + 1, generation: generation)
         }
     }
 
@@ -458,7 +481,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// and the whole point of the chain is that these words sit next to each
     /// other, so the run is a single known string.
     private func applyRun(from: String, to: String, target: TISInputSource,
-                          marking count: Int, generation: UInt64) {
+                          marking count: Int, endingAt boundary: Int, generation: UInt64) {
         let bundleID = context.currentCold.bundleID
         guard !isReplacing else { note("пропущено: предыдущая замена ещё идёт"); return }
         // Anything typed since the decision moved the caret, and the decision was
@@ -480,7 +503,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 guard outcome.succeeded else { self.note("замена не удалась"); return }
                 self.replacementsMade.bump()
                 self.note("\(outcome.strategy.rawValue): \(from.count) → \(to.count) симв.")
-                self.chain.markConverted(count: count)
+                self.chain.markConverted(count: count, endingAt: boundary)
                 // The generation after our own synthetic events: our marked
                 // events do not bump it, so this is still the user's last real
                 // keystroke, and any further typing will move past it.
@@ -744,7 +767,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self.undosMade.bump()
                 // The word the user just rejected. Trimmed of the separator we
                 // added, so "ghbdtn " and "ghbdtn" are the same word.
-                let word = pending.replacement.trimmingCharacters(in: .whitespacesAndNewlines)
+                // The word to remember is the one the user *typed*, because that
+                // is what will be seen again next time. Storing the converted
+                // form meant the list was consulted with «ghbdtn» and filled
+                // with «привет» — two different keys, so nothing was ever found
+                // and undoing taught the app nothing at all.
+                let word = pending.original.trimmingCharacters(in: .whitespacesAndNewlines)
                 let becamePermanent = self.feedback.recordUndo(of: word)
                 self.note(becamePermanent
                           ? "откат \(pending.original.count) симв.; слово занесено в «не менять» навсегда"

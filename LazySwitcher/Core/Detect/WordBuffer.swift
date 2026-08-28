@@ -101,7 +101,13 @@ final class WordBuffer {
 
         if record.keyCode == Self.backspace {
             if count > 0 { count -= 1; return .retracted }
-            return .ignored
+            // Backspace on an empty buffer deletes something we are not tracking
+            // — the space before the word, or the tail of a word we already
+            // committed. Reporting `.ignored` was wrong: the chain went on
+            // believing those words sit where it left them, and a later
+            // replacement would reach across the gap and delete text nobody had
+            // looked at.
+            return .reset(.caretMoved)
         }
 
         if Self.boundaryKeyCodes.contains(record.keyCode) {
@@ -112,14 +118,27 @@ final class WordBuffer {
             return .boundary(word: word, terminator: record.keyCode)
         }
 
-        guard record.keyCode < 128 else { return .ignored }
+        // Function keys, media keys, the Fn row: they produce nothing on screen,
+        // but `render` would still ask the layout for a character and could get
+        // a control code, which then goes into the replacement as a character
+        // that was never there.
+        guard record.keyCode < 128, !Self.nonPrintingKeyCodes.contains(record.keyCode) else {
+            return .ignored
+        }
 
         // Overflow means something long and word-like is being typed — a token, a
         // hash, a path. Dropping the oldest key would silently corrupt the word,
         // so we let go of the whole thing instead.
         guard count < Self.capacity else {
+            // Overflow means something long and word-like is being typed — a
+            // token, a hash, a path. Dropping the oldest key would silently
+            // corrupt the word, so we let go of the whole thing.
+            //
+            // And we say so: reporting `.ignored` left the chain believing the
+            // previous words were still adjacent to the caret, when in fact an
+            // unknown number of characters now sits between them and it.
             wipe(reason: .wordCommitted)
-            return .ignored
+            return .reset(.wordCommitted)
         }
 
         storage[count] = record
@@ -149,6 +168,15 @@ final class WordBuffer {
     /// Space, tab, return and the keypad enter. Escape too: it ends whatever was
     /// being typed everywhere it means anything.
     static let boundaryKeyCodes: Set<UInt16> = [0x31, 0x30, 0x24, 0x4C, 0x35]
+
+    /// Keys that put nothing on screen: the function row, Help, and the
+    /// modifier-like keys that still arrive as key codes.
+    static let nonPrintingKeyCodes: Set<UInt16> = [
+        0x7A, 0x78, 0x63, 0x76, 0x60, 0x61, 0x62, 0x64,   // F1–F8
+        0x65, 0x6D, 0x67, 0x6F, 0x69, 0x6B, 0x71, 0x6A,   // F9–F16
+        0x40, 0x4F, 0x50, 0x5A,                            // F17–F20
+        0x72, 0x3F, 0x39,                                  // Help, Fn, Caps Lock
+    ]
 
     /// Arrows, Home/End, Page Up/Down, forward delete.
     static let caretMovingKeyCodes: Set<UInt16> = [0x7B, 0x7C, 0x7D, 0x7E,

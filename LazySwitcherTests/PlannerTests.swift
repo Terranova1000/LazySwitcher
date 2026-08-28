@@ -54,7 +54,7 @@ final class CorrectionPlannerTests: XCTestCase {
             let (plan, _, entry) = planner.plan(input, chain: chain)
             chain.append(entry)
             if case .convert(let carrying, _) = plan {
-                chain.markConverted(count: carrying + 1)
+                chain.markConverted(count: carrying + 1, endingAt: chain.recordedCount)
             }
             result.append((word, plan))
         }
@@ -189,7 +189,7 @@ final class ReportedCasesTests: XCTestCase {
                 .init(typed: word, alternative: alternative, sourceLanguage: "en",
                       targetLanguage: "ru", minimumLength: minimum), chain: chain)
             chain.append(entry)
-            if case .convert(let carrying, _) = plan { chain.markConverted(count: carrying + 1) }
+            if case .convert(let carrying, _) = plan { chain.markConverted(count: carrying + 1, endingAt: chain.recordedCount) }
             result.append((word, plan))
         }
         return result

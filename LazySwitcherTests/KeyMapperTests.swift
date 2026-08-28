@@ -157,3 +157,49 @@ final class KeyMapperTests: XCTestCase {
         XCTAssertEqual(first?.layoutID, second?.layoutID)
     }
 }
+
+/// Caps Lock, which inverts Shift for letters and leaves punctuation alone.
+final class CapsLockRenderingTests: XCTestCase {
+
+    private var mapper: KeyMapper!
+    private var ru: KeyMapper.Table!
+
+    override func setUpWithError() throws {
+        try super.setUpWithError()
+        mapper = KeyMapper()
+        for source in InputSourceService.enabledKeyboardLayouts()
+        where InputSourceService.primaryLanguage(of: source) == "ru" {
+            ru = mapper.table(for: source)
+        }
+        try XCTSkipIf(ru == nil, "Русская раскладка не установлена")
+    }
+
+    private func keys(_ codes: [UInt16], caps: Bool, shift: Bool = false) -> [KeyRecord] {
+        codes.map { KeyRecord(keyCode: $0, shift: shift, capsLock: caps) }
+    }
+
+    /// g h b d t n → привет, and with Caps Lock → ПРИВЕТ.
+    func testCapsLockUppercasesLetters() {
+        let codes: [UInt16] = [0x05, 0x04, 0x0B, 0x02, 0x11, 0x2D]
+        XCTAssertEqual(mapper.render(keys(codes, caps: false), with: ru), "привет")
+        XCTAssertEqual(mapper.render(keys(codes, caps: true), with: ru), "ПРИВЕТ")
+    }
+
+    /// Shift together with Caps Lock cancels out, as on any keyboard.
+    func testShiftAndCapsLockCancel() {
+        let codes: [UInt16] = [0x05, 0x04]
+        XCTAssertEqual(mapper.render(keys(codes, caps: true, shift: true), with: ru), "пр")
+    }
+
+    /// And punctuation is untouched by Caps Lock — `,` stays `,` even though on
+    /// ЙЦУКЕН that key is the letter б, which Caps Lock *does* affect.
+    func testCapsLockAffectsLettersOnly() throws {
+        let en = try XCTUnwrap(InputSourceService.enabledKeyboardLayouts()
+            .first { InputSourceService.primaryLanguage(of: $0) == "en" }
+            .flatMap { mapper.table(for: $0) })
+        // Клавиша запятой в английской раскладке даёт знак, а не букву.
+        XCTAssertEqual(mapper.render([KeyRecord(keyCode: 0x2B, capsLock: true)], with: en), ",")
+        // Она же в русской даёт букву — и Caps Lock её поднимает.
+        XCTAssertEqual(mapper.render([KeyRecord(keyCode: 0x2B, capsLock: true)], with: ru), "Б")
+    }
+}

@@ -49,10 +49,17 @@ struct WordChain {
 
     mutating func clear() { entries.removeAll() }
 
-    /// Marks the tail as converted after a replacement went through.
-    mutating func markConverted(count: Int) {
-        for index in stride(from: entries.count - 1, to: max(entries.count - count - 1, -1), by: -1)
-        where index >= 0 {
+    /// How many words have been recorded. Used to mark exactly the ones a
+    /// replacement covered, rather than whatever happens to be at the end when
+    /// it finishes — by then the user may have typed more, and the marks would
+    /// land on words that were never touched.
+    var recordedCount: Int { entries.count }
+
+    /// Marks a specific range as converted, identified by where it ended.
+    mutating func markConverted(count: Int, endingAt boundary: Int) {
+        let last = min(boundary, entries.count) - 1
+        guard last >= 0 else { return }
+        for index in stride(from: last, to: max(last - count, -1), by: -1) where index >= 0 {
             let old = entries[index]
             entries[index] = Entry(typed: old.typed, alternative: old.alternative,
                                    convertedIsFunctionWord: old.convertedIsFunctionWord,

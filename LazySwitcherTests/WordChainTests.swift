@@ -166,7 +166,7 @@ final class WordChainTests: XCTestCase {
         var chain = WordChain()
         chain.append(entry(typed: "xnj"))
         chain.append(entry(typed: "yt"))
-        chain.markConverted(count: 2)
+        chain.markConverted(count: 2, endingAt: 2)
         XCTAssertTrue(chain.retroactiveCandidates().isEmpty)
         XCTAssertTrue(chain.previousWasConverted)
     }

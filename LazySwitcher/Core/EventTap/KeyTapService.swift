@@ -235,8 +235,29 @@ final class KeyTapService {
                 break
             }
 
-            // Held-down keys would otherwise flood the buffer.
-            guard event.getIntegerValueField(.keyboardEventAutorepeat) == 0 else { break }
+            // A held-down key repeats, and every repeat changes the screen.
+            //
+            // Ignoring repeats entirely was wrong in a way that only shows up
+            // afterwards: the text grew or shrank while our picture of it stood
+            // still, and `inputGeneration` — the very counter that is supposed
+            // to catch "the text moved under us" — did not advance either, so
+            // every staleness check passed on stale data. A held Backspace is
+            // the bad case: characters disappear, the buffer still believes they
+            // are there, and the next replacement deletes that many from a caret
+            // that has moved.
+            //
+            // We cannot reconstruct what repeated, so we do not try. The
+            // generation advances, which invalidates anything in flight, and the
+            // buffer is dropped, which is the honest answer to "what is on
+            // screen now" — we no longer know.
+            if event.getIntegerValueField(.keyboardEventAutorepeat) != 0 {
+                inputGeneration.bump()
+                wordBuffer.wipe(reason: .caretMoved)
+                if let handler = onBufferInvalidated {
+                    DispatchQueue.main.async { handler(.caretMoved) }
+                }
+                break
+            }
 
             expireBufferIfIdle(now: now)
             lastKeystrokeTime.value = now

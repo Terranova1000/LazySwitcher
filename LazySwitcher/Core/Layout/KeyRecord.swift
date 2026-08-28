@@ -12,13 +12,23 @@ struct KeyRecord: Equatable {
     /// Only the modifiers that change which character a key produces.
     let shift: Bool
     let option: Bool
+    /// Caps Lock at the moment of the keystroke.
+    ///
+    /// Left out originally, and the consequence was not "capitals look wrong":
+    /// the rendered word came out lower-case while the screen showed upper-case,
+    /// so the accessibility route selected the right range, compared it with the
+    /// wrong string, called it a mismatch — and marked the whole application as
+    /// one where accessibility does not work, permanently, for the session.
+    let capsLock: Bool
     /// Mach absolute time, for the pause-before-word feature and nothing else.
     let timestamp: UInt64
 
-    init(keyCode: UInt16, shift: Bool = false, option: Bool = false, timestamp: UInt64 = 0) {
+    init(keyCode: UInt16, shift: Bool = false, option: Bool = false,
+         capsLock: Bool = false, timestamp: UInt64 = 0) {
         self.keyCode = keyCode
         self.shift = shift
         self.option = option
+        self.capsLock = capsLock
         self.timestamp = timestamp
     }
 
@@ -26,6 +36,7 @@ struct KeyRecord: Equatable {
         self.keyCode = UInt16(event.getIntegerValueField(.keyboardEventKeycode))
         self.shift = event.flags.contains(.maskShift)
         self.option = event.flags.contains(.maskAlternate)
+        self.capsLock = event.flags.contains(.maskAlphaShift)
         self.timestamp = timestamp
     }
 }
