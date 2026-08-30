@@ -86,6 +86,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let automaticReplacements = AtomicCounter()
     private(set) var lastDecisionNote = "—"
 
+    /// Last few decisions, so "it did not work just now" can be answered with
+    /// what the app actually decided instead of a guess. Lengths and verdicts
+    /// only — never the words themselves (rule 1).
+    private(set) var decisionLog: [String] = []
+    private func logDecision(_ line: String) {
+        lastDecisionNote = line
+        decisionLog.append(line)
+        if decisionLog.count > 15 { decisionLog.removeFirst() }
+    }
+    /// Words we could not even read, and why. The counter matters more than it
+    /// looks: a non-zero value here means the app is silently doing nothing.
+    let unreadableWords = AtomicCounter()
+    var hasLayoutPair: Bool { currentLayouts != nil }
+
     /// The word that was just committed, kept so the hotkey can reach back for
     /// it after the user has already pressed space.
     private struct Committed {
@@ -173,10 +187,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         inputSources.startWatching()
         refreshLayouts()
 
-        // Sweeps up a stuck notification expectation. Rare, cheap, and the sort
-        // of state that otherwise stays wrong for the rest of the session.
-        let sweep = Timer(timeInterval: 5, repeats: true) { [weak self] _ in
-            self?.inputSources.clearStaleExpectation()
+        // Heartbeat.
+        //
+        // Everything else in this app is driven by notifications, and one that
+        // does not arrive leaves the state depending on it wrong for the rest of
+        // the session. That is exactly the shape of the complaint we could not
+        // reproduce: "it does not work, then I do something, and after that it
+        // works" — the something being whatever finally delivered the missing
+        // notification.
+        //
+        // So once a second we check the few things that must hold for the app to
+        // do anything at all, and put them right if they do not. Cheap enough to
+        // be unnoticeable, and it turns a session-long failure into a one-second
+        // one.
+        let sweep = Timer(timeInterval: 1, repeats: true) { [weak self] _ in
+            self?.heartbeat()
         }
         RunLoop.main.add(sweep, forMode: .common)
         layoutSweepTimer = sweep
@@ -273,25 +298,111 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // a background agent should never do: if the user is not going to grant
         // access, we would spend the rest of the login session asking. After a
         // few minutes the onboarding window is the thing that will notice.
+        //
+        // Watching `AXIsProcessTrusted()` and not `CGPreflight*`, which is the
+        // whole point of this rewrite. `CGPreflight*` answers from a per-process
+        // cache that is created on first use and never refreshed (Н6, measured:
+        // the poll kept answering "no" indefinitely while the checkbox was on,
+        // and a restart answered "yes" at once). An earlier version of this timer
+        // polled exactly that cached value, so in a process that started without
+        // access it could not ever have succeeded — it ran for five minutes and
+        // gave up, and the app stayed silently dead until the next launch.
+        //
+        // `AXIsProcessTrusted()` has the opposite flaw — it keeps saying true
+        // after access is revoked — but it does turn true when access is granted,
+        // which is the only transition this timer exists to catch.
         var elapsed = 0.0
         let t = Timer(timeInterval: 1.0, repeats: true) { [weak self] timer in
             guard let self else { timer.invalidate(); return }
             elapsed += 1
-            if elapsed > 300 {
-                timer.invalidate()
-                permissionTimer = nil
+            guard AXIsProcessTrusted() else {
+                // Nobody granted anything. Stop asking after a few minutes, but
+                // leave the app able to notice later: onboarding and the menu
+                // both re-check on demand.
+                if elapsed > 300 {
+                    timer.invalidate()
+                    permissionTimer = nil
+                }
                 return
             }
-            guard Permissions.current(runProbe: false).isUsable else { return }
+            timer.invalidate()
+            permissionTimer = nil
+            // Access is there. The tap may still refuse, because our own
+            // CGPreflight cache in this process predates the grant — in which
+            // case the only cure is a fresh process, silently.
             if tap.start() {
                 menuBar.update(permissions: .granted)
-                timer.invalidate()
-                permissionTimer = nil
+            } else {
+                relaunchForFreshPermissionCache()
             }
         }
         RunLoop.main.add(t, forMode: .common)
         permissionTimer = t
     }
+
+    /// Starts a new copy of ourselves and steps aside.
+    ///
+    /// The only way to get a `CGPreflight*` cache that reflects a grant made
+    /// after launch (Н6). Silent on purpose: asking the user to quit and reopen
+    /// an app they just gave permission to is a bad first impression, and every
+    /// tool in this category either does this or makes the user do it by hand.
+    private func relaunchForFreshPermissionCache() {
+        let configuration = NSWorkspace.OpenConfiguration()
+        configuration.createsNewApplicationInstance = true
+        NSWorkspace.shared.openApplication(at: Bundle.main.bundleURL,
+                                           configuration: configuration) { _, _ in
+            DispatchQueue.main.async { NSApp.terminate(nil) }
+        }
+    }
+
+    /// Puts right whatever quietly went wrong.
+    ///
+    /// Deliberately not clever: it re-derives state rather than working out why
+    /// the state is missing. Each check is cheap, and each thing being absent
+    /// means the app does nothing while appearing to run.
+    private func heartbeat() {
+        inputSources.clearStaleExpectation()
+        // Who is in front is the state most likely to be silently wrong, and the
+        // cheapest to re-derive.
+        apps.resync()
+
+        // No layout pair means every word is unreadable. Rebuilding it needs a
+        // layout change to arrive, and without a working replacement nothing
+        // changes the layout — a closed loop only an outside event breaks.
+        if currentLayouts == nil { refreshLayouts() }
+
+        // A field we could not classify. Ask again — Electron builds its
+        // accessibility tree lazily, and the answer unavailable a moment ago is
+        // often available now.
+        //
+        // Not in Chrome and Firefox, though: there the answer is known to be
+        // permanently unavailable (00-DECISIONS.md, Н10), and asking every
+        // second forever is a cost with no possible return. Not asking a
+        // question whose answer cannot exist is the cheapest optimisation there
+        // is.
+        // And not every second: each attempt is a synchronous round trip into
+        // another process, and a first version of this heartbeat asked once a
+        // second forever — 41% of a core, which is the failure this project
+        // treats as disqualifying. Five seconds is often enough to recover from
+        // a missed notification and rare enough to cost nothing.
+        if focus.fieldRole == .unknown,
+           !apps.bundleID.isEmpty,
+           !policies.hidesFieldRoles(apps.bundleID),
+           Date().timeIntervalSince(lastUnknownRetry) > 5 {
+            lastUnknownRetry = Date()
+            focus.refresh(bundleID: apps.bundleID)
+            publishContext(bundleID: apps.bundleID, appName: apps.appName)
+        }
+
+        // A replacement that never finished would block every later one.
+        if isReplacing, Date().timeIntervalSince(replacementStartedAt) > 3 {
+            isReplacing = false
+            note("замена не завершилась — блокировка снята")
+        }
+    }
+
+    private var replacementStartedAt = Date.distantPast
+    private var lastUnknownRetry = Date.distantPast
 
     /// Main thread only — it reads TIS.
     private func refreshLayouts() {
@@ -343,7 +454,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if Settings.shared.actInUnidentifiedFields, focus.fieldRole == .unknown {
             hot.fieldRole = .text
         }
-        hot.fieldRoleUnavailable = policies.hidesFieldRoles(bundleID)
+        // Either a browser we know keeps its tree closed, or any application
+        // that just answered with a web container. The second case is what makes
+        // the gesture work in Claude and ChatGPT: the field cannot be identified,
+        // so we still never act on our own — but an explicit request from the
+        // person sitting there is a signal we cannot get any other way, and
+        // refusing it leaves them with nothing.
+        hot.fieldRoleUnavailable = policies.hidesFieldRoles(bundleID) || focus.answeredWithWebContainer
         if !Settings.shared.automaticEnabled, hot.policy == .automatic {
             hot.policy = .hotkeyOnly
         }
@@ -357,7 +474,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         wordsCommitted.bump()
         // Captured here, before any hop. Everything downstream compares against it.
         let generation = tap.inputGeneration.value
-        guard let reading = read(word) else { return }
+        guard let reading = read(word) else {
+            unreadableWords.bump()
+            // The snapshot is missing or unusable. Ask for it again rather than
+            // waiting for a layout change that may never come — that wait is a
+            // closed loop, since without a working replacement nothing switches
+            // the layout in the first place.
+            DispatchQueue.main.async { [weak self] in self?.refreshLayouts() }
+            return
+        }
         wordsConvertible.bump()
 
         // The veto runs on the rendered word, before any scoring — it is cheap
@@ -396,7 +521,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // is the same problem. Escape may have closed the field entirely.
             guard terminator == Self.spaceKeyCode else {
                 chain.clear()
-                lastDecisionNote = "\(reading.typed.count) симв.: закрыто не пробелом — не трогаем"
+                logDecision("\(reading.typed.count) симв.: закрыто не пробелом — не трогаем")
                 return
             }
             considerAutomatic(word: word,
@@ -432,7 +557,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                                convertedIsFunctionWord: false, typedIsFunctionWord: false,
                                separator: trailing ?? "", evidence: Scorer.Evidence(),
                                converted: false))
-            lastDecisionNote = blocked
+            logDecision(blocked)
         }
 
         guard !isPaused else { remember("на паузе"); return }
@@ -463,8 +588,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         switch plan {
         case .keep, .wait:
-            lastDecisionNote = String(format: "%d симв.: %@ Λ=%.2f",
-                                      typed.count, "\(plan)", evidence.perCharacter)
+            logDecision(String(format: "%d симв.: %@ Λ=%.2f",
+                               typed.count, "\(plan)", evidence.perCharacter))
             return
         case .convert(let carrying, let reason):
             let rescued = Array(chain.entries.suffix(carrying))
@@ -474,9 +599,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 from = item.onScreen + item.separator + from
                 to = item.alternative + item.separator + to
             }
-            lastDecisionNote = String(format: "%d симв.: convert (%@)%@",
-                                      typed.count, reason.rawValue,
-                                      carrying > 0 ? ", с ним \(carrying) слева" : "")
+            logDecision(String(format: "%d симв.: convert (%@)%@",
+                               typed.count, reason.rawValue,
+                               carrying > 0 ? ", с ним \(carrying) слева" : ""))
             automaticReplacements.bump()
             if carrying > 0 { chainRescues.bump() }
             // +1 because the current word is appended by the `defer` below, so
@@ -496,6 +621,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                           marking count: Int, endingAt boundary: Int, generation: UInt64) {
         let bundleID = context.currentCold.bundleID
         guard !isReplacing else { note("пропущено: предыдущая замена ещё идёт"); return }
+        replacementStartedAt = Date()
         // Anything typed since the decision moved the caret, and the decision was
         // about characters that are no longer in front of it.
         guard tap.inputGeneration.value == generation else {
@@ -598,6 +724,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if undo.isAvailable, let pending = undo.consume(currentGeneration: tap.inputGeneration.value) {
                 revert(pending)
                 return
+            }
+            // Ask about the field again before deciding, rather than trusting
+            // what we learned when the application was activated. In Electron
+            // applications that answer is often `.unknown` — the accessibility
+            // tree for the page had not been built yet — and nothing arrives
+            // later to correct it. Refusing the gesture on a stale answer is the
+            // worst outcome available: the person asked for something explicitly
+            // and got silence.
+            //
+            // Affordable here precisely because it is a gesture: it happens when
+            // a human presses Shift twice, not on every keystroke.
+            if focus.fieldRole == .unknown, !apps.bundleID.isEmpty {
+                focus.refresh(bundleID: apps.bundleID)
+                publishContext(bundleID: apps.bundleID, appName: apps.appName)
             }
             convertOnHotkey()
         }
@@ -732,6 +872,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         guard !isReplacing else { note("пропущено: предыдущая замена ещё идёт"); return }
         isReplacing = true
+        replacementStartedAt = Date()
 
         // Off the main thread: synthetic typing sleeps between events, and a
         // ten-letter word is over a hundred milliseconds of it.

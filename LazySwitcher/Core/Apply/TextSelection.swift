@@ -20,7 +20,7 @@ enum TextSelection {
     /// we would not know what we were replacing, and converting text we cannot
     /// read is exactly how a password gets mangled.
     static func current() -> Snapshot? {
-        guard let pid = NSWorkspace.shared.frontmostApplication?.processIdentifier else { return nil }
+        guard let pid = AppMonitor.trueFrontmost()?.processIdentifier else { return nil }
         let app = AXUIElementCreateApplication(pid)
         AXUIElementSetMessagingTimeout(app, 0.2)
 

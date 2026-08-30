@@ -27,7 +27,38 @@ final class AppMonitor {
             else { return }
             self?.adopt(app)
         }
-        if let front = NSWorkspace.shared.frontmostApplication { adopt(front) }
+        if let front = Self.trueFrontmost() { adopt(front) }
+    }
+
+    /// Who is actually in front, which is not the question `frontmostApplication`
+    /// answers.
+    ///
+    /// Measured on macOS 15: after the screen has been locked and unlocked,
+    /// `NSWorkspace.shared.frontmostApplication` keeps returning
+    /// `com.apple.loginwindow` indefinitely, while `menuBarOwningApplication`
+    /// returns the real application. Both were read in the same instant:
+    ///
+    ///     frontmostApplication:     com.apple.loginwindow (loginwindow)
+    ///     menuBarOwningApplication: com.anthropic.claudefordesktop (Claude)
+    ///
+    /// This is the bug behind "it does not work at first, then it starts".
+    /// Locking the screen is something people do many times a day; afterwards we
+    /// believed we were in `loginwindow`, refused everything, and only recovered
+    /// when an activation notification arrived — which requires switching
+    /// applications, because returning to the one already in front is not a
+    /// change and produces no notification.
+    static func trueFrontmost() -> NSRunningApplication? {
+        NSWorkspace.shared.menuBarOwningApplication ?? NSWorkspace.shared.frontmostApplication
+    }
+
+    /// Re-reads who is in front and adopts them if we were wrong.
+    ///
+    /// Cheap — both properties are answered from the workspace's own bookkeeping,
+    /// with no round trip into another process — so this is safe to call from a
+    /// timer. `adopt` ignores an application we already know about, so being
+    /// right costs nothing.
+    func resync() {
+        if let front = Self.trueFrontmost() { adopt(front) }
     }
 
     func stop() {

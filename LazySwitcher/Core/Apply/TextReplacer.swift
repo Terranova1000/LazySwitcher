@@ -248,7 +248,7 @@ final class TextReplacer {
     }
 
     private func focusedElement() -> AXUIElement? {
-        guard let pid = NSWorkspace.shared.frontmostApplication?.processIdentifier else { return nil }
+        guard let pid = AppMonitor.trueFrontmost()?.processIdentifier else { return nil }
         let app = AXUIElementCreateApplication(pid)
         AXUIElementSetMessagingTimeout(app, 0.2)
         var focused: CFTypeRef?

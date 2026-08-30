@@ -227,6 +227,9 @@ final class DiagnosticsWindowController: NSWindowController {
             + "\(delegate?.inputSources.failedSwitches.value ?? 0)")
         row("автозамен", "\(delegate?.automaticReplacements.value ?? 0)")
         row("последнее решение", delegate?.lastDecisionNote ?? "—")
+        for (index, entry) in (delegate?.decisionLog.suffix(10) ?? []).enumerated() {
+            row(index == 0 ? "журнал решений" : "", entry)
+        }
         if let ctx = delegate?.context.current, let cold = delegate?.context.currentCold {
             row("приложение", cold.appName.isEmpty ? "—" : cold.appName)
             row("политика", "\(ctx.policy)")

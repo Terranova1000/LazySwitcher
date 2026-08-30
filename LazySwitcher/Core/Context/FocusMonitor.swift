@@ -127,7 +127,7 @@ final class FocusMonitor {
     // MARK: - Reading the focused element
 
     func refresh(bundleID: String? = nil) {
-        let id = bundleID ?? NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? ""
+        let id = bundleID ?? AppMonitor.trueFrontmost()?.bundleIdentifier ?? ""
 
         // App-level classification first: it is certain, and it is cheap.
         if terminalBundleIDs.contains(id) { publish(.terminal, element: nil); return }
@@ -172,8 +172,75 @@ final class FocusMonitor {
         lastRole = role ?? "—"
         lastSubrole = subrole ?? "—"
 
-        let classified = Self.classify(role: role, subrole: subrole)
-        publish(classified, element: target)
+        var classified = Self.classify(role: role, subrole: subrole)
+        var resolved = target
+        answeredWithWebContainer = false
+
+        // A container, not a field. Ask it what *it* considers focused.
+        //
+        // Electron applications — Claude, ChatGPT — answer
+        // `kAXFocusedUIElementAttribute` at the application level with the
+        // `AXWebArea` that holds the page, not with the text field inside it.
+        // The web area answers the same question properly, so the way in is to
+        // ask again one level down.
+        //
+        // This is what "sometimes it works, sometimes it does not" was: the
+        // application returns the field directly often enough to look fine, and
+        // the container often enough to look broken, and nothing about the two
+        // cases is visible from outside. Measured before the fix: 159 attempts
+        // to wake the tree, none successful, while the answer was one query away.
+        if classified == .unknown {
+            var trace: [String] = ["вход: \(lastRole)"]
+            defer { descentTrace = trace.joined(separator: " → ") }
+            var descended = 0
+            var current = target
+            while classified == .unknown, descended < 3 {
+                var inner: CFTypeRef?
+                let status = AXUIElementCopyAttributeValue(current, kAXFocusedUIElementAttribute as CFString,
+                                                           &inner)
+                guard status == .success, let next = inner else {
+                    trace.append("фокус внутри: \(Self.describe(status))")
+                    break
+                }
+                let child = next as! AXUIElement
+                AXUIElementSetMessagingTimeout(child, 0.2)
+                // Same element again: the container considers itself focused, so
+                // there is nothing below and looping would be pointless.
+                if CFEqual(child, current) { trace.append("тот же элемент"); break }
+
+                var innerRole: CFTypeRef?
+                var innerSubrole: CFTypeRef?
+                _ = AXUIElementCopyAttributeValue(child, kAXRoleAttribute as CFString, &innerRole)
+                _ = AXUIElementCopyAttributeValue(child, kAXSubroleAttribute as CFString, &innerSubrole)
+                classified = Self.classify(role: innerRole as? String, subrole: innerSubrole as? String)
+                trace.append("\((innerRole as? String) ?? "?")=\(classified)")
+                if classified != .unknown {
+                    lastRole = (innerRole as? String) ?? "—"
+                    lastSubrole = (innerSubrole as? String) ?? "—"
+                    resolved = child
+                }
+                current = child
+                descended += 1
+            }
+        }
+
+        // Last resort: walk the children looking for a text field.
+        //
+        // A web area that will not name its focused element sometimes still
+        // lists it. Bounded hard — two levels, the first few children — because
+        // this runs on the main thread and a deep search of a page would be felt.
+        if classified == .unknown, let found = Self.findTextField(under: target, depth: 2) {
+            classified = found.role
+            lastRole = found.name
+            resolved = found.element
+            descentTrace += " → дети: \(found.name)"
+        }
+
+        if classified == .unknown, Self.webContainerRoles.contains(lastRole) {
+            answeredWithWebContainer = true
+        }
+
+        publish(classified, element: resolved)
         if classified == .unknown { scheduleWakeRetry(bundleID: id) }
     }
 
@@ -231,6 +298,22 @@ final class FocusMonitor {
     }
 
     private(set) var nudgeResult = "—"
+    /// What the descent into a container found. Diagnostics only.
+    private(set) var descentTrace = "—"
+
+    /// The application answered with a web container instead of a field.
+    ///
+    /// Not the same as "we did not get an answer": it means this application
+    /// *cannot* tell us about fields right now, because the accessibility tree
+    /// for its web content has not been built. Electron applications — Claude,
+    /// ChatGPT — do this until enough interaction has happened, and there is no
+    /// supported way to hurry them.
+    ///
+    /// Detected from behaviour rather than from a list of bundle identifiers.
+    /// A list would be wrong twice over: it would miss Electron applications
+    /// nobody thought of, and it would keep punishing ones that have since
+    /// started answering properly.
+    private(set) var answeredWithWebContainer = false
 
     private func retryWake(bundleID: String, step: Int, generation: Int) {
         guard step < Self.wakeDelays.count else {
@@ -255,6 +338,41 @@ final class FocusMonitor {
             }
             retryWake(bundleID: bundleID, step: step + 1, generation: generation)
         }
+    }
+
+    /// Roles that mean "this application has no field-level answer for us".
+    ///
+    /// `AXWebArea` and friends are web content whose inner tree was never built.
+    /// `AXApplication` is the application naming *itself* as the focused element,
+    /// which is the same statement made less politely.
+    ///
+    /// A native application with a real text field never answers this way, so
+    /// treating these as "cannot identify" costs nothing there: if nothing is
+    /// focused, the gesture finds no text and does nothing regardless.
+    static let webContainerRoles: Set<String> = [
+        "AXWebArea", "AXScrollArea", "AXGroup", "AXApplication",
+    ]
+
+    /// Looks for a text field among the descendants. Bounded on purpose.
+    private static func findTextField(under element: AXUIElement,
+                                      depth: Int) -> (element: AXUIElement, role: FieldRole, name: String)? {
+        guard depth > 0 else { return nil }
+        var raw: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, kAXChildrenAttribute as CFString, &raw) == .success,
+              let children = raw as? [AXUIElement] else { return nil }
+        for child in children.prefix(12) {
+            AXUIElementSetMessagingTimeout(child, 0.15)
+            var role: CFTypeRef?
+            var subrole: CFTypeRef?
+            _ = AXUIElementCopyAttributeValue(child, kAXRoleAttribute as CFString, &role)
+            _ = AXUIElementCopyAttributeValue(child, kAXSubroleAttribute as CFString, &subrole)
+            let verdict = classify(role: role as? String, subrole: subrole as? String)
+            if verdict != .unknown {
+                return (child, verdict, (role as? String) ?? "?")
+            }
+            if let deeper = findTextField(under: child, depth: depth - 1) { return deeper }
+        }
+        return nil
     }
 
     private static func describe(_ status: AXError) -> String {
@@ -288,7 +406,7 @@ final class FocusMonitor {
     }
 
     private func publish(_ role: FieldRole, element: AXUIElement? = nil) {
-        let app = NSWorkspace.shared.frontmostApplication?.localizedName ?? "—"
+        let app = AppMonitor.trueFrontmost()?.localizedName ?? "—"
         let entry = Observation(app: app, role: lastRole, subrole: lastSubrole, verdict: role)
         if history.last.map({ $0.app != entry.app || $0.role != entry.role || $0.verdict != entry.verdict }) ?? true {
             history.append(entry)

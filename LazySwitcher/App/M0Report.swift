@@ -90,6 +90,8 @@ enum M0Report {
             row("последнее действие", delegate.lastReplacementNote)
             row("автозамен", "\(delegate.automaticReplacements.value)")
             row("своих событий отброшено", "\(delegate.tap.ownEventsDiscarded.value)")
+            row("снимок раскладок", flag(delegate.hasLayoutPair))
+            row("слов не прочитано", "\(delegate.unreadableWords.value)")
             row("история замен", delegate.replacer.history.joined(separator: " | "))
             row("спасено цепочкой", "\(delegate.chainRescues.value)")
             row("последнее решение", delegate.lastDecisionNote)
@@ -107,6 +109,9 @@ enum M0Report {
             row("побудок дерева", "\(delegate.focus.wakeSuccesses) удачных из \(delegate.focus.wakeAttempts)")
             row("AXManualAccessibility", delegate.focus.manualAccessibilityResult)
             row("запрос окон (побудка)", delegate.focus.nudgeResult)
+            row("спуск внутрь", delegate.focus.descentTrace)
+            row("ответил веб-контейнером", delegate.focus.answeredWithWebContainer ? "да" : "нет")
+            row("жест разрешён", ctx.fieldRoleUnavailable ? "да (поле неопознаваемо)" : "по роли поля")
             row("замена разрешена", flag(ctx.allowsAutomaticReplacement))
         }
 
