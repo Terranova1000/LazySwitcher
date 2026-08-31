@@ -106,3 +106,32 @@ API без токена. Это осознанное ограничение — 
 
 Если эти тесты когда-нибудь перестанут проходить, автообновление надо выключать,
 а не чинить обход.
+
+## Проверка, что обновление действительно доедет
+
+Делать после каждой публикации. Проверяет не «файл выложен», а «установленная
+старая версия сможет поставить новую» — это разные утверждения, и второе никогда
+не проверялось само.
+
+```bash
+VER=$(ls -t dist/*.dmg | head -1 | sed 's/.*LazySwitcher-//;s/\.dmg//')
+curl -s https://api.github.com/repos/Terranova1000/LazySwitcher/releases/latest \
+  | python3 -c "import json,sys; d=json.load(sys.stdin); print(d['tag_name'], [a['name'] for a in d['assets']])"
+```
+
+Ожидание: тег — новая версия, среди активов есть `LazySwitcher-$VER.dmg`.
+Приложение спрашивает ровно этот адрес и берёт `tag_name`.
+
+Затем — главное: подпись. Обновление проверяет скачанный бандл **требованием
+работающего бинарника**, и если сертификат сменился, обновление молча откажет.
+
+```bash
+hdiutil attach "dist/LazySwitcher-$VER.dmg" -nobrowse -quiet -mountpoint /tmp/rel
+DR=$(codesign -d -r- "/Applications/Lazy Switcher.app" | grep '^designated')
+codesign --verify --deep --strict -R "=${DR#designated => }" "/tmp/rel/Lazy Switcher.app"
+hdiutil detach /tmp/rel -quiet -force
+```
+
+Пустой вывод и нулевой код возврата — установленная версия примет новую. Ошибка
+означает, что все, кто уже пользуется приложением, обновиться не смогут, и узнают
+об этом молчанием.
