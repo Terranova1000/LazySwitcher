@@ -140,10 +140,35 @@ final class OnboardingWindowController: NSWindowController {
     /// that choice.
     private func startWatchingForGrant() {
         poll?.invalidate()
+        // Remembered before the timer exists, for the same reason as in
+        // `AppDelegate`: a restart only helps when access arrived after this
+        // process started. If we were already trusted and things still do not
+        // work, restarting lands in the same place — and this window comes back
+        // in front of whatever the person was doing, every time.
+        let trustedAtStart = AXIsProcessTrusted()
         let timer = Timer(timeInterval: 1.0, repeats: true) { [weak self] _ in
-            guard AXIsProcessTrusted() else { return }
-            self?.poll?.invalidate()
-            self?.relaunch()
+            guard let self, AXIsProcessTrusted() else { return }
+            let last = UserDefaults.standard.double(forKey: AppDelegate.relaunchStampKey)
+            let since = last == 0 ? .greatestFiniteMagnitude
+                                  : Date().timeIntervalSince1970 - last
+            switch PermissionRecovery.decide(trusted: true,
+                                             trustedAtStart: trustedAtStart,
+                                             tapStarted: false,
+                                             alreadyRelaunched: false,
+                                             secondsSinceLastRelaunch: since,
+                                             elapsed: 1) {
+            case .relaunch:
+                poll?.invalidate()
+                UserDefaults.standard.set(Date().timeIntervalSince1970,
+                                          forKey: AppDelegate.relaunchStampKey)
+                relaunch()
+            case .stuck:
+                // Nothing a restart can fix. Stop asking and leave the window
+                // where it is; the step itself explains what to do.
+                poll?.invalidate()
+            case .granted, .keepWaiting, .giveUp:
+                break
+            }
         }
         RunLoop.main.add(timer, forMode: .common)
         poll = timer

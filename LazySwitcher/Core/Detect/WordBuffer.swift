@@ -113,7 +113,25 @@ final class WordBuffer {
         if Self.boundaryKeyCodes.contains(record.keyCode) {
             let word = currentWord
             wipe(reason: .wordCommitted)
-            guard !word.isEmpty else { return .ignored }
+            guard !word.isEmpty else {
+                // A boundary key with nothing in front of it still put something
+                // on screen — a newline, a second space, a tab — and the chain's
+                // whole model is that its words sit next to each other separated
+                // by single spaces it can retype. Reporting `.ignored` here left
+                // that model standing while the text underneath it changed.
+                //
+                // This is the "it eats the line break" bug: word, space, Return,
+                // then a word on the new line. The Return committed nothing, so
+                // the chain still believed the previous line's word sat directly
+                // behind the caret; the next replacement reached back across the
+                // newline, deleted it, and pulled the second line onto the first.
+                //
+                // Every key that can land here breaks the same assumption, so
+                // they are all treated the same way. The cost is losing the
+                // multi-word inference after a double space — which is a missed
+                // correction, the cheap kind of mistake.
+                return .reset(.caretMoved)
+            }
             justCommitted = (keys: word, terminator: record.keyCode)
             return .boundary(word: word, terminator: record.keyCode)
         }

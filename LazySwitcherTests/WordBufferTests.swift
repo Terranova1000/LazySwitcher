@@ -50,8 +50,13 @@ final class WordBufferTests: XCTestCase {
         }
     }
 
+    /// Слова нет — завершать нечего. Но и промолчать нельзя: клавиша всё равно
+    /// что-то напечатала, и цепочка слов должна об этом узнать (см. разбор
+    /// «съеденного переноса строки» ниже).
     func testBoundaryOnAnEmptyBufferIsNotAWord() {
-        XCTAssertEqual(buffer.append(KeyRecord(keyCode: VK.space), hasCommandControlOrOption: false), .ignored)
+        let result = buffer.append(KeyRecord(keyCode: VK.space), hasCommandControlOrOption: false)
+        if case .boundary = result { XCTFail("завершать нечего — слова не было") }
+        XCTAssertEqual(result, .reset(.caretMoved))
     }
 
     // MARK: - The punctuation that is really letters
@@ -250,5 +255,61 @@ final class BufferSynchronisationTests: XCTestCase {
         XCTAssertFalse(plain.capsLock)
         XCTAssertTrue(capsed.capsLock)
         XCTAssertNotEqual(plain, capsed, "Записи должны различаться, иначе состояние теряется")
+    }
+}
+
+// MARK: - Граница без слова перед ней
+
+/// «Съедает перенос строки»: слово, пробел, Enter, слово на новой строке — и
+/// замена дотягивалась назад через перенос, стирала его и поднимала вторую
+/// строку к первой.
+///
+/// Причина была здесь: Enter после пробела завершает пустое слово, и это
+/// возвращалось как `.ignored`. Цепочка слов продолжала считать, что её слова
+/// лежат вплотную к каретке через обычный пробел, который она умеет
+/// перепечатать. На экране между ними был уже перенос.
+extension WordBufferTests {
+
+    func testReturnAfterSpaceInvalidatesTheChain() {
+        type([VK.g, VK.h, VK.b])
+        guard case .boundary = buffer.append(KeyRecord(keyCode: VK.space),
+                                             hasCommandControlOrOption: false) else {
+            return XCTFail("пробел обязан завершить слово")
+        }
+        let afterReturn = buffer.append(KeyRecord(keyCode: VK.ret), hasCommandControlOrOption: false)
+        XCTAssertEqual(afterReturn, .reset(.caretMoved),
+                       "перенос строки обязан обнулить цепочку, иначе замена дотянется через него")
+    }
+
+    /// Любая клавиша-граница на пустом буфере что-то печатает и ломает
+    /// предположение цепочки о том, что между словами один обычный пробел.
+    func testEveryBoundaryKeyOnAnEmptyBufferResets() {
+        for boundary in [VK.space, VK.tab, VK.ret] {
+            buffer = WordBuffer()
+            let result = buffer.append(KeyRecord(keyCode: boundary), hasCommandControlOrOption: false)
+            XCTAssertEqual(result, .reset(.caretMoved),
+                           "клавиша \(boundary) на пустом буфере обязана обнулить цепочку")
+        }
+    }
+
+    /// Двойной пробел — тот же случай: разделитель между словами перестал быть
+    /// одним пробелом, а перепечатать цепочка умеет только его.
+    func testDoubleSpaceResets() {
+        type([VK.g, VK.h])
+        _ = buffer.append(KeyRecord(keyCode: VK.space), hasCommandControlOrOption: false)
+        XCTAssertEqual(buffer.append(KeyRecord(keyCode: VK.space), hasCommandControlOrOption: false),
+                       .reset(.caretMoved))
+    }
+
+    /// А обычная граница со словом перед ней по-прежнему завершает слово —
+    /// правка не должна была ничего сломать в основном пути.
+    func testOrdinaryBoundaryStillCommitsTheWord() {
+        type([VK.g, VK.h, VK.b])
+        guard case .boundary(let word, let terminator) =
+                buffer.append(KeyRecord(keyCode: VK.space), hasCommandControlOrOption: false) else {
+            return XCTFail("слово перед пробелом обязано завершиться")
+        }
+        XCTAssertEqual(word.map(\.keyCode), [VK.g, VK.h, VK.b])
+        XCTAssertEqual(terminator, VK.space)
     }
 }

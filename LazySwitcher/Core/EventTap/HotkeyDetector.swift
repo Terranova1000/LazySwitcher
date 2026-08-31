@@ -173,27 +173,44 @@ final class HotkeyDetector {
     /// purpose — the panic gesture must not move when the main one does.
     private func handlePanicChord(flags: CGEventFlags, keyCode: UInt16,
                                   timestamp: TimeInterval) -> Event? {
-        let isLeft = keyCode == Self.leftShiftKeyCode
-        let isDown = flags.contains(.maskShift) && Self.pressed(keyCode, in: flags)
+        // Which Shifts are held is read from `flags`, not remembered.
+        //
+        // `flags` states what is down at this instant. The previous version
+        // assembled the same answer from events — `leftShiftDown = true` on one
+        // event, `false` on another — and a single missed `flagsChanged` left one
+        // of them stuck true for the rest of the session. macOS drops these
+        // events routinely: every time it disables the tap for a moment and we
+        // re-enable it, whatever happened in between never arrives.
+        //
+        // The consequence was severe and completely silent. With one side stuck
+        // down, pressing the *other* Shift alone looked like both, and releasing
+        // it fired the panic chord — which pauses the application. Nothing says
+        // so out loud; the only sign is the menu-bar icon changing to a pause
+        // symbol, and an invisible icon was the other half of the same report.
+        // From the outside: "it works, then it does not, and the hotkey does
+        // nothing either" — because a paused application ignores that too.
+        leftShiftDown = flags.rawValue & HotkeyStyle.deviceBit(for: Self.leftShiftKeyCode) != 0
+        rightShiftDown = flags.rawValue & HotkeyStyle.deviceBit(for: Self.rightShiftKeyCode) != 0
 
-        if isDown {
-            if isLeft { leftShiftDown = true } else { rightShiftDown = true }
-            if leftShiftDown && rightShiftDown {
-                if bothShiftsSince == nil { bothShiftsSince = timestamp }
-                shiftPressedAt = nil
-                keyPressedDuringShift = false
-                lastTapEndedAt = nil
-            }
+        if leftShiftDown && rightShiftDown {
+            if bothShiftsSince == nil { bothShiftsSince = timestamp }
+            shiftPressedAt = nil
+            keyPressedDuringShift = false
+            lastTapEndedAt = nil
             return nil
         }
 
-        if isLeft { leftShiftDown = false } else { rightShiftDown = false }
         guard let since = bothShiftsSince else { panicAlreadyFiredForThisChord = false; return nil }
 
         bothShiftsSince = nil
         lastTapEndedAt = nil
         shiftPressedAt = nil
-        if !panicAlreadyFiredForThisChord, timestamp - since >= config.minimumPanicOverlap {
+        // Typing while both were held is not a gesture, it is typing — somebody
+        // reaching for a capital letter with the other hand. The main hotkey has
+        // always required this; the panic chord did not, and it is the one whose
+        // false positive costs the most.
+        if !panicAlreadyFiredForThisChord, !keyPressedDuringShift,
+           timestamp - since >= config.minimumPanicOverlap {
             panicAlreadyFiredForThisChord = true
             return .panicToggle
         }

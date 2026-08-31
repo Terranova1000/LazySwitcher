@@ -70,7 +70,29 @@ final class TextReplacer {
     var settleDelay: useconds_t = 25_000
     /// Apps where the accessibility route claimed success and changed nothing.
     /// Once burned we do not try it there again this session.
-    private var accessibilityFailures: Set<String> = []
+    /// Applications the accessibility route has failed in, and when.
+    ///
+    /// Timed rather than permanent. The entry used to be forever — `forget` was
+    /// written for this and never called from anywhere — so one failure in an
+    /// application meant every later replacement there went through synthetic
+    /// typing, which sends a count of backspaces and cannot check what it is
+    /// deleting. A single wrong guess about the text thus removed the one path
+    /// that verifies itself, for the rest of the session.
+    ///
+    /// Applications also get better with time rather than worse: an accessibility
+    /// tree that was not built when we first asked usually is later (Н35), so an
+    /// answer from thirty seconds ago should not decide the next hour.
+    private var accessibilityFailures: [String: Date] = [:]
+    private static let failureMemory: TimeInterval = 60
+
+    private func isBlacklisted(_ bundleID: String) -> Bool {
+        guard let since = accessibilityFailures[bundleID] else { return false }
+        guard Date().timeIntervalSince(since) < Self.failureMemory else {
+            accessibilityFailures.removeValue(forKey: bundleID)
+            return false
+        }
+        return true
+    }
 
     init(synthetic: SyntheticEventSource? = SyntheticEventSource()) {
         self.synthetic = synthetic
@@ -84,7 +106,7 @@ final class TextReplacer {
     func replace(original: String, with replacement: String, in bundleID: String) -> Outcome {
         usleep(settleDelay)
 
-        if !accessibilityFailures.contains(bundleID) {
+        if !isBlacklisted(bundleID) {
             var result = replaceViaAccessibility(original: original, with: replacement)
             if result == .mismatch {
                 // Give it one more chance before concluding anything. A slow
@@ -109,10 +131,10 @@ final class TextReplacer {
                 // The next word goes through synthetic typing, which does not
                 // depend on the app agreeing with us about positions. One word
                 // is lost per app, once, and then it works.
-                accessibilityFailures.insert(bundleID)
+                accessibilityFailures[bundleID] = Date()
                 return Outcome(strategy: .accessibility, succeeded: false)
             case .notSupported:
-                accessibilityFailures.insert(bundleID)
+                accessibilityFailures[bundleID] = Date()
             }
         }
 
@@ -124,7 +146,7 @@ final class TextReplacer {
         return Outcome(strategy: .synthetic, succeeded: true)
     }
 
-    func forget(_ bundleID: String) { accessibilityFailures.remove(bundleID) }
+    func forget(_ bundleID: String) { accessibilityFailures.removeValue(forKey: bundleID) }
 
     // MARK: - Accessibility route
 

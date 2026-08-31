@@ -10,21 +10,40 @@ final class HotkeyDetectorTests: XCTestCase {
     private let leftBit: UInt64 = 0x00000002
     private let rightBit: UInt64 = 0x00000004
 
-    override func setUp() { super.setUp(); detector = HotkeyDetector() }
+    /// Which modifier keys the simulated keyboard is holding down.
+    ///
+    /// A real `flagsChanged` event carries every device bit that is held at that
+    /// instant, not just the bit for the key that moved. The helpers used to
+    /// send only the moving key's bit, which is why `up` needed to be told
+    /// `otherStillDown:` by hand — that parameter was papering over the gap.
+    /// Modelling the keyboard properly closes it, and lets the detector read the
+    /// answer out of the flags instead of assembling it from events it might
+    /// never receive.
+    private var held: Set<UInt16> = []
+
+    override func setUp() {
+        super.setUp()
+        detector = HotkeyDetector()
+        held = []
+    }
+
+    private func flags(with mask: CGEventFlags) -> CGEventFlags {
+        var raw: UInt64 = held.isEmpty ? 0 : mask.rawValue
+        for key in held { raw |= HotkeyStyle.deviceBit(for: key) }
+        return CGEventFlags(rawValue: raw)
+    }
 
     private func down(_ key: UInt16, at t: TimeInterval, secure: Bool = false) -> HotkeyDetector.Event? {
-        let bit = key == left ? leftBit : rightBit
-        let flags = CGEventFlags(rawValue: CGEventFlags.maskShift.rawValue | bit)
-        return detector.handleFlagsChanged(flags: flags, keyCode: key, timestamp: t, secureInputActive: secure)
+        held.insert(key)
+        return detector.handleFlagsChanged(flags: flags(with: .maskShift), keyCode: key,
+                                           timestamp: t, secureInputActive: secure)
     }
 
     private func up(_ key: UInt16, at t: TimeInterval, secure: Bool = false,
                     otherStillDown: UInt16? = nil) -> HotkeyDetector.Event? {
-        var raw: UInt64 = 0
-        if let other = otherStillDown {
-            raw = CGEventFlags.maskShift.rawValue | (other == left ? leftBit : rightBit)
-        }
-        return detector.handleFlagsChanged(flags: CGEventFlags(rawValue: raw), keyCode: key,
+        held.remove(key)
+        if let other = otherStillDown { held.insert(other) }
+        return detector.handleFlagsChanged(flags: flags(with: .maskShift), keyCode: key,
                                            timestamp: t, secureInputActive: secure)
     }
 
@@ -138,6 +157,36 @@ final class HotkeyDetectorTests: XCTestCase {
         XCTAssertNil(up(right, at: 0.16, secure: true))
     }
 
+    // MARK: - Потерянные события
+
+    /// Ложная паника — самый дорогой из возможных промахов этого детектора:
+    /// приложение молча выключается до перезапуска, и единственный признак —
+    /// значок в строке меню, который человек может и не видеть.
+    ///
+    /// Раньше состояние «левый Shift нажат» собиралось из событий и держалось,
+    /// пока не придёт событие об отпускании. macOS такие события теряет
+    /// регулярно — каждый раз, когда система отключает перехват на мгновение и
+    /// мы включаем его обратно, всё случившееся в промежутке не приходит вовсе.
+    /// После этого одиночное нажатие ВТОРОГО Shift выглядело как оба.
+    func testLostReleaseDoesNotLeaveAShiftStuckDown() {
+        XCTAssertNil(down(left, at: 0.00))
+        // Отпускание левого до нас не дошло: система его проглотила.
+        held.remove(left)
+
+        // Одиночное нажатие правого — обычный набор заглавной буквы.
+        XCTAssertNil(down(right, at: 1.00))
+        XCTAssertNil(up(right, at: 1.20),
+                     "одиночный Shift не должен читаться как паника из-за потерянного события")
+    }
+
+    /// И наоборот: если оба действительно зажаты, паника обязана сработать —
+    /// правка не должна была сделать жест недоступным.
+    func testPanicStillFiresWhenBothAreGenuinelyHeld() {
+        XCTAssertNil(down(right, at: 0.00))
+        XCTAssertNil(down(left, at: 0.02))
+        XCTAssertEqual(up(right, at: 0.20), .panicToggle)
+    }
+
     // MARK: - Recovery
 
     func testDetectorKeepsWorkingAfterAReset() {
@@ -154,18 +203,29 @@ final class HotkeyDetectorTests: XCTestCase {
 /// doing its real job.
 final class HotkeyStyleTests: XCTestCase {
 
+    /// Same faithful keyboard as the detector tests: an event carries every
+    /// device bit that is held, not only the bit for the key that moved.
+    private var held: Set<UInt16> = []
+
+    private func flags(with mask: CGEventFlags) -> CGEventFlags {
+        var raw: UInt64 = held.isEmpty ? 0 : mask.rawValue
+        for key in held { raw |= HotkeyStyle.deviceBit(for: key) }
+        return CGEventFlags(rawValue: raw)
+    }
+
+
     private var detector: HotkeyDetector!
 
     private func configure(_ style: HotkeyStyle) {
         detector = HotkeyDetector()
         detector.config.style = style
+        held = []
     }
 
     private func send(_ keyCode: UInt16, down: Bool, at t: TimeInterval,
                       flag: CGEventFlags, secure: Bool = false) -> HotkeyDetector.Event? {
-        var raw: UInt64 = 0
-        if down { raw = flag.rawValue | HotkeyStyle.deviceBit(for: keyCode) }
-        return detector.handleFlagsChanged(flags: CGEventFlags(rawValue: raw), keyCode: keyCode,
+        if down { held.insert(keyCode) } else { held.remove(keyCode) }
+        return detector.handleFlagsChanged(flags: flags(with: flag), keyCode: keyCode,
                                            timestamp: t, secureInputActive: secure)
     }
 
@@ -259,11 +319,8 @@ final class HotkeyStyleTests: XCTestCase {
             configure(style)
             XCTAssertNil(send(0x38, down: true, at: 0.00, flag: .maskShift))
             _ = send(0x3C, down: true, at: 0.03, flag: .maskShift)
-            let release = detector.handleFlagsChanged(
-                flags: CGEventFlags(rawValue: CGEventFlags.maskShift.rawValue
-                                    | HotkeyStyle.deviceBit(for: 0x3C)),
-                keyCode: 0x38, timestamp: 0.15, secureInputActive: false)
-            XCTAssertEqual(release, .panicToggle, "\(style): паника обязана работать всегда")
+            XCTAssertEqual(send(0x38, down: false, at: 0.15, flag: .maskShift), .panicToggle,
+                           "\(style): паника обязана работать всегда")
         }
     }
 

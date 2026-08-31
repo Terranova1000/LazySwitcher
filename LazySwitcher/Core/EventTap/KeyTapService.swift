@@ -29,6 +29,19 @@ final class KeyTapService {
     let userInputDisableCount = AtomicCounter()
     let watchdogRevivalCount = AtomicCounter()
 
+    /// Bumped by the watchdog every time it has looked at the tap and found it
+    /// alive. Written only from the tap thread, read from the main thread.
+    ///
+    /// The watchdog can only rescue a tap whose thread is still running. If that
+    /// thread dies or wedges, the watchdog dies with it and nothing is left to
+    /// notice — the application keeps running, the icon stays in the menu bar,
+    /// and no keystroke ever reaches us again. This counter is how the main
+    /// thread can tell the difference between "quiet" and "gone".
+    let watchdogTick = AtomicCounter()
+
+    /// How many times the tap had to be built again from nothing.
+    let tapRebuildCount = AtomicCounter()
+
     /// Last key seen, for the M0 diagnostics window. Memory only: never logged,
     /// never written to disk, wiped when Secure Input turns on (CLAUDE.md rule 1).
     let lastKeyCode = AtomicCounter(UInt64.max)
@@ -98,7 +111,17 @@ final class KeyTapService {
 
     func start() -> Bool {
         guard !isRunning else { return true }
-        guard Permissions.current(runProbe: false).isUsable else { return false }
+        // No preflight check here.
+        //
+        // `CGPreflight*` answers from a per-process cache that never refreshes
+        // (Н6), so in a process that started without access it says "no" forever
+        // — including after the user grants it, and including when this is a
+        // restart after the tap died. Refusing to even try on that answer is how
+        // a recoverable failure becomes permanent.
+        //
+        // `CGEvent.tapCreate` asks the system itself, returns nil on refusal and
+        // shows nothing to the user, so it is both the honest answer and a safe
+        // one to ask for.
 
         let ready = DispatchSemaphore(value: 0)
         var created = false
@@ -175,11 +198,42 @@ final class KeyTapService {
     }
 
     private func checkTapAlive() {
-        guard let tap else { return }
+        // A tap that is gone, or whose mach port has died under us, cannot be
+        // re-enabled — `tapEnable` on a dead port succeeds silently and changes
+        // nothing. The previous version only ever tried to re-enable, so once
+        // the port died the application was deaf for the rest of the session
+        // while its watchdog reported success every five seconds.
+        guard let tap, CFMachPortIsValid(tap) else { rebuildTap(); return }
+
         if !CGEvent.tapIsEnabled(tap: tap) {
             CGEvent.tapEnable(tap: tap, enable: true)
             watchdogRevivalCount.bump()
+            // Verify rather than assume. If it did not come back, the port is
+            // no longer usable whatever it claims about itself.
+            guard CGEvent.tapIsEnabled(tap: tap) else { rebuildTap(); return }
         }
+        watchdogTick.bump()
+    }
+
+    /// Throws the tap away and builds a new one on this same run loop.
+    ///
+    /// Runs on the tap thread, from inside the watchdog's own callback —
+    /// invalidating a `CFRunLoopTimer` from within its handler is allowed, and
+    /// `installTap` puts a fresh one back.
+    private func rebuildTap() {
+        teardownTap()
+        guard installTap() else { return }
+        tapRebuildCount.bump()
+        watchdogTick.bump()
+        // We were not listening while this was being rebuilt.
+        noteInputMissed()
+    }
+
+    /// Everything, from the thread up. The last resort, driven from the main
+    /// thread when the tap thread has stopped answering.
+    func restart() -> Bool {
+        stop()
+        return start()
     }
 
     private func teardownTap() {
@@ -202,8 +256,10 @@ final class KeyTapService {
             // M0 only: the timeout sweep drives the callback with events it posts
             // itself, so it needs to stall here, on the one path that is otherwise
             // a straight passthrough. Armed by nothing in a real build.
+            #if DEBUG
             let sweepStall = sweepStallMilliseconds.value
             if sweepStall > 0 { usleep(useconds_t(sweepStall * 1000)) }
+            #endif
             return Unmanaged.passUnretained(event)
         }
 
@@ -212,17 +268,26 @@ final class KeyTapService {
         if type == .tapDisabledByTimeout {
             timeoutDisableCount.bump()
             if let tap { CGEvent.tapEnable(tap: tap, enable: true) }
+            noteInputMissed()
             return nil
         }
         if type == .tapDisabledByUserInput {
             userInputDisableCount.bump()
             if let tap { CGEvent.tapEnable(tap: tap, enable: true) }
+            noteInputMissed()
             return nil
         }
 
-        // 3. Deliberate stall, M0 experiment only. Zero in every real build.
+        // 3. Deliberate stall, M0 experiment only.
+        //
+        // Compiled out of Release rather than left at zero. Nothing in a shipped
+        // build can arm it — the triggers are debug-only and the release audit
+        // checks they are absent — but this is the callback macOS times, and a
+        // sleep on the path it times has no business existing there at all.
+        #if DEBUG
         let stall = injectedStallMilliseconds.value
         if stall > 0 { usleep(useconds_t(stall * 1000)) }
+        #endif
 
         let secure = secureInputMirror.value != 0
         let now = mach_absolute_time()
@@ -374,8 +439,18 @@ final class KeyTapService {
         inputGeneration.bump()
         guard let runLoop else { return }
         CFRunLoopPerformBlock(runLoop, CFRunLoopMode.commonModes.rawValue) { [weak self] in
+            // Only the word buffer. It is a claim about text sitting on screen,
+            // and a caret that moved makes it false.
+            //
+            // The hotkey detector is not that kind of state — it is a claim
+            // about which keys a person is holding right now, and moving the
+            // caret does not let go of their Shift. Resetting it here meant that
+            // in applications which emit focus notifications in bursts (every
+            // Electron application, every browser) a gesture in progress was
+            // wiped between the two taps, and the hotkey "did nothing" for
+            // reasons the person had no way to see. It is reset where it should
+            // be: when Secure Input turns on.
             self?.wordBuffer.wipe(reason: reason)
-            self?.hotkeyDetector.reset()
         }
         CFRunLoopWakeUp(runLoop)
         if let handler = onBufferInvalidated {
@@ -387,7 +462,32 @@ final class KeyTapService {
     func wipeVolatileState() {
         lastKeyCode.value = UInt64.max
         lastFlags.value = 0
+        if let runLoop {
+            CFRunLoopPerformBlock(runLoop, CFRunLoopMode.commonModes.rawValue) { [weak self] in
+                self?.hotkeyDetector.reset()
+            }
+            CFRunLoopWakeUp(runLoop)
+        }
         invalidateBuffer(reason: .secureInput)
+    }
+
+    /// Keystrokes happened and we did not see them.
+    ///
+    /// Every recovery path arrives here: macOS disabled the tap for being slow
+    /// or for user input, or the tap had to be built again. In all of them the
+    /// application comes back listening — and holding a description of the text
+    /// on screen that was accurate before the gap and is a guess after it. Acting
+    /// on that guess means deleting characters somebody else put there, which is
+    /// the expensive kind of mistake; saying "I lost track" costs one missed
+    /// correction.
+    ///
+    /// Runs on the tap thread, which is the thread that owns the buffer.
+    private func noteInputMissed() {
+        wordBuffer.wipe(reason: .caretMoved)
+        inputGeneration.bump()
+        if let handler = onBufferInvalidated {
+            DispatchQueue.main.async { handler(.caretMoved) }
+        }
     }
 
     // MARK: - Waking up

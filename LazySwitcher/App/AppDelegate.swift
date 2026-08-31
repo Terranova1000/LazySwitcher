@@ -130,6 +130,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             || ProcessInfo.processInfo.environment["XCTestBundlePath"] != nil
     }
 
+    /// Opening the application again, while it is already running, opens
+    /// settings.
+    ///
+    /// A menu-bar application has exactly one way in, and when that way is
+    /// missing — the icon did not appear, the menu bar is full, the item was
+    /// dragged out — the application is running with no way to reach it, quit
+    /// it, or find out what is wrong. Double-clicking it in Applications is what
+    /// a person tries next, and until now that did nothing at all.
+    ///
+    /// It also re-asserts the status item, in case the icon is the thing that
+    /// went missing.
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows: Bool) -> Bool {
+        guard !isRunningUnderTests else { return true }
+        menuBar.reassert()
+        showSettings(nil)
+        return true
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         guard !isRunningUnderTests else { return }
         menuBar = MenuBarController(delegate: self)
@@ -334,7 +352,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             timer.invalidate()
             permissionTimer = nil
-            let last = UserDefaults.standard.double(forKey: Self.relaunchStampKey)
+            let last = UserDefaults.standard.double(forKey: AppDelegate.relaunchStampKey)
             let since = last == 0 ? .greatestFiniteMagnitude
                                   : Date().timeIntervalSince1970 - last
             switch PermissionRecovery.decide(trusted: true,
@@ -357,6 +375,47 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         permissionTimer = t
     }
 
+    /// Notices that the tap has stopped listening, and rebuilds it.
+    ///
+    /// The tap has its own watchdog, which handles the ordinary failures —
+    /// macOS disabling the tap for being slow, or for user input. What it cannot
+    /// handle is its own thread going away: the watchdog is a timer on that
+    /// thread's run loop, so if the loop stops, the thing that would have
+    /// noticed stops with it. From outside, that looks exactly like the
+    /// complaint: the application is running, the icon is there, and nothing
+    /// responds — not even the hotkey, because the hotkey arrives through the
+    /// same tap as everything else.
+    ///
+    /// So the tap thread publishes a tick every five seconds, and this watches
+    /// for it to stop advancing. Fifteen seconds is three missed ticks: long
+    /// enough that a busy moment cannot trigger it, short enough that a person
+    /// pauses, tries again, and it works.
+    private func ensureTapIsAlive() {
+        guard tap.isRunning else { return }
+
+        let tick = tap.watchdogTick.value
+        if tick != lastTapTick {
+            lastTapTick = tick
+            lastTapTickAt = Date()
+            return
+        }
+        guard Date().timeIntervalSince(lastTapTickAt) > 15,
+              Date().timeIntervalSince(lastTapRestart) > 30
+        else { return }
+
+        lastTapRestart = Date()
+        lastTapTickAt = Date()
+        if tap.restart() {
+            tap.setHotkeyStyle(Settings.shared.hotkeyStyle)
+            // Everything typed while the tap was gone is unknown to us.
+            tap.invalidateBuffer(reason: .caretMoved)
+            note("перехват событий пересоздан — поток перестал отвечать")
+        } else {
+            menuBar.update(permissions: .missing)
+            note("перехват событий не удалось пересоздать")
+        }
+    }
+
     /// Starts a new copy of ourselves and steps aside.
     ///
     /// The only way to get a `CGPreflight*` cache that reflects a grant made
@@ -369,7 +428,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // restart was not a moment ago — so no path anyone adds later can turn
         // this into a launch loop.
         hasRelaunchedForPermissions = true
-        UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: Self.relaunchStampKey)
+        UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: AppDelegate.relaunchStampKey)
 
         let configuration = NSWorkspace.OpenConfiguration()
         configuration.createsNewApplicationInstance = true
@@ -385,6 +444,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// the state is missing. Each check is cheap, and each thing being absent
     /// means the app does nothing while appearing to run.
     private func heartbeat() {
+        // Before anything else: the icon is the only way to reach this
+        // application at all, so an icon that has gone missing is not a cosmetic
+        // problem — it is the application becoming unreachable while still
+        // running. Two lines to re-assert it, once a second.
+        menuBar.ensureVisible()
+        ensureTapIsAlive()
         inputSources.clearStaleExpectation()
         // Who is in front is the state most likely to be silently wrong, and the
         // cheapest to re-derive.
@@ -427,8 +492,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private var replacementStartedAt = Date.distantPast
     private var lastUnknownRetry = Date.distantPast
+    private var lastTapTick: UInt64 = 0
+    private var lastTapTickAt = Date()
+    private var lastTapRestart = Date.distantPast
     private var hasRelaunchedForPermissions = false
-    private static let relaunchStampKey = "lastPermissionRelaunch"
+    /// Shared with onboarding: both paths can restart the process, and the rule
+    /// that stops them looping is only useful if they count the same restarts.
+    static let relaunchStampKey = "lastPermissionRelaunch"
 
     /// Main thread only — it reads TIS.
     private func refreshLayouts() {
@@ -503,6 +573,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let generation = tap.inputGeneration.value
         guard let reading = read(word) else {
             unreadableWords.bump()
+            // We know a word was typed and we do not know what it was. That is
+            // the same position as "the caret moved": the chain's description of
+            // the text on screen now has a hole in it, and a later replacement
+            // measured against it would delete the wrong characters. Fail closed
+            // (§2.1.6) — forget the run rather than guess at it.
+            chain.clear()
+            undo.invalidate()
             // The snapshot is missing or unusable. Ask for it again rather than
             // waiting for a layout change that may never come — that wait is a
             // closed loop, since without a working replacement nothing switches
