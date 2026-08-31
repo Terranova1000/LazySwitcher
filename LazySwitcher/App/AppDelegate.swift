@@ -311,6 +311,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // `AXIsProcessTrusted()` has the opposite flaw — it keeps saying true
         // after access is revoked — but it does turn true when access is granted,
         // which is the only transition this timer exists to catch.
+        // Remembered now, before anything can change it: a restart only helps if
+        // access arrived *after* we launched, because the only thing a restart
+        // fixes is our own stale CGPreflight cache. If we were already trusted
+        // when this timer started and the tap still will not open, the cause is
+        // something a restart cannot touch — and restarting anyway would put the
+        // app in a loop, launching a fresh copy every second forever.
+        let trustedAtStart = AXIsProcessTrusted()
         var elapsed = 0.0
         let t = Timer(timeInterval: 1.0, repeats: true) { [weak self] timer in
             guard let self else { timer.invalidate(); return }
@@ -327,13 +334,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             timer.invalidate()
             permissionTimer = nil
-            // Access is there. The tap may still refuse, because our own
-            // CGPreflight cache in this process predates the grant — in which
-            // case the only cure is a fresh process, silently.
-            if tap.start() {
+            let last = UserDefaults.standard.double(forKey: Self.relaunchStampKey)
+            let since = last == 0 ? .greatestFiniteMagnitude
+                                  : Date().timeIntervalSince1970 - last
+            switch PermissionRecovery.decide(trusted: true,
+                                             trustedAtStart: trustedAtStart,
+                                             tapStarted: tap.start(),
+                                             alreadyRelaunched: hasRelaunchedForPermissions,
+                                             secondsSinceLastRelaunch: since,
+                                             elapsed: elapsed) {
+            case .granted:
                 menuBar.update(permissions: .granted)
-            } else {
+            case .relaunch:
                 relaunchForFreshPermissionCache()
+            case .stuck:
+                menuBar.update(permissions: .stuck)
+            case .keepWaiting, .giveUp:
+                break
             }
         }
         RunLoop.main.add(t, forMode: .common)
@@ -347,6 +364,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// an app they just gave permission to is a bad first impression, and every
     /// tool in this category either does this or makes the user do it by hand.
     private func relaunchForFreshPermissionCache() {
+        // Belt and braces over the reasoning at the call site. Whatever else is
+        // true, this process restarts itself at most once, and only if the last
+        // restart was not a moment ago — so no path anyone adds later can turn
+        // this into a launch loop.
+        hasRelaunchedForPermissions = true
+        UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: Self.relaunchStampKey)
+
         let configuration = NSWorkspace.OpenConfiguration()
         configuration.createsNewApplicationInstance = true
         NSWorkspace.shared.openApplication(at: Bundle.main.bundleURL,
@@ -390,7 +414,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
            !policies.hidesFieldRoles(apps.bundleID),
            Date().timeIntervalSince(lastUnknownRetry) > 5 {
             lastUnknownRetry = Date()
-            focus.refresh(bundleID: apps.bundleID)
+            focus.refresh(bundleID: apps.bundleID, startsWakeLadder: false)
             publishContext(bundleID: apps.bundleID, appName: apps.appName)
         }
 
@@ -403,6 +427,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private var replacementStartedAt = Date.distantPast
     private var lastUnknownRetry = Date.distantPast
+    private var hasRelaunchedForPermissions = false
+    private static let relaunchStampKey = "lastPermissionRelaunch"
 
     /// Main thread only — it reads TIS.
     private func refreshLayouts() {
@@ -460,6 +486,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // so we still never act on our own — but an explicit request from the
         // person sitting there is a signal we cannot get any other way, and
         // refusing it leaves them with nothing.
+        replacer.targetPID = focus.observedPID
         hot.fieldRoleUnavailable = policies.hidesFieldRoles(bundleID) || focus.answeredWithWebContainer
         if !Settings.shared.automaticEnabled, hot.policy == .automatic {
             hot.policy = .hotkeyOnly
@@ -749,7 +776,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// is unambiguously what they mean, and it is the only way to fix a whole
     /// sentence typed in the wrong layout.
     private func convertOnHotkey() {
-        if let selection = TextSelection.current(), !selection.text.isEmpty {
+        if let selection = TextSelection.current(pid: focus.observedPID), !selection.text.isEmpty {
             convertSelection(selection)
             return
         }

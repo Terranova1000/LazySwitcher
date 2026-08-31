@@ -30,25 +30,58 @@ final class AppMonitor {
         if let front = Self.trueFrontmost() { adopt(front) }
     }
 
-    /// Who is actually in front, which is not the question `frontmostApplication`
-    /// answers.
+    /// Applications that answer "who is in front" with themselves while the
+    /// screen is locked, long after it has been unlocked.
     ///
-    /// Measured on macOS 15: after the screen has been locked and unlocked,
-    /// `NSWorkspace.shared.frontmostApplication` keeps returning
-    /// `com.apple.loginwindow` indefinitely, while `menuBarOwningApplication`
-    /// returns the real application. Both were read in the same instant:
+    /// `com.apple.loginwindow` is the one measured (Н34); `SecurityAgent` is the
+    /// same machinery for authentication sheets and is listed for the same
+    /// reason, not because it was seen misbehaving.
+    private static let lockScreenImposters: Set<String> = [
+        "com.apple.loginwindow", "com.apple.SecurityAgent",
+    ]
+
+    /// Who is actually in front.
+    ///
+    /// `frontmostApplication` is the right answer almost always, because it names
+    /// the process that keyboard events are being delivered to — which is the
+    /// only thing we care about. It has exactly one measured failure: after the
+    /// screen has been locked and unlocked it keeps naming `loginwindow`
+    /// indefinitely, while `menuBarOwningApplication` names the real application
+    /// (Н34). Both read in the same instant:
     ///
     ///     frontmostApplication:     com.apple.loginwindow (loginwindow)
     ///     menuBarOwningApplication: com.anthropic.claudefordesktop (Claude)
     ///
-    /// This is the bug behind "it does not work at first, then it starts".
-    /// Locking the screen is something people do many times a day; afterwards we
-    /// believed we were in `loginwindow`, refused everything, and only recovered
-    /// when an activation notification arrived — which requires switching
-    /// applications, because returning to the one already in front is not a
-    /// change and produces no notification.
+    /// So the substitution is made only for that lie, and never as a general
+    /// rule. Version 1.9 made it the general rule and that was wrong: an
+    /// accessory application (`LSUIElement`) holding keyboard focus does not own
+    /// the menu bar, so `menuBarOwningApplication` names the application *behind*
+    /// it. Measured with a purpose-built accessory bundle on macOS 15:
+    ///
+    ///     frontmost=com.verify.accprobe   menuBar=com.apple.Safari
+    ///
+    /// — held for as long as the accessory kept focus. Spotlight, Raycast,
+    /// Alfred, a password manager's popover and this application's own settings
+    /// window are all accessory windows, so the general rule pointed every
+    /// decision, every read and every write at whatever happened to be behind
+    /// the panel the person was typing into.
     static func trueFrontmost() -> NSRunningApplication? {
-        NSWorkspace.shared.menuBarOwningApplication ?? NSWorkspace.shared.frontmostApplication
+        let front = NSWorkspace.shared.frontmostApplication
+        guard shouldBelieveMenuBarOwner(frontmostBundleID: front?.bundleIdentifier) else {
+            return front
+        }
+        return NSWorkspace.shared.menuBarOwningApplication ?? front
+    }
+
+    /// The whole rule, as a decision over one value, so it can be tested.
+    ///
+    /// True only when `frontmostApplication` gave us an answer we know to be a
+    /// lie. Any other answer — including one from an accessory application that
+    /// does not own the menu bar — is believed, because keyboard events go where
+    /// `frontmostApplication` says they go.
+    static func shouldBelieveMenuBarOwner(frontmostBundleID: String?) -> Bool {
+        guard let id = frontmostBundleID, !id.isEmpty else { return true }
+        return lockScreenImposters.contains(id)
     }
 
     /// Re-reads who is in front and adopts them if we were wrong.

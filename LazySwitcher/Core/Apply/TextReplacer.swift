@@ -247,8 +247,13 @@ final class TextReplacer {
         return .replaced
     }
 
+    /// The process to write into. Kept in step with the focus monitor so that
+    /// the decision and the write cannot land in different applications.
+    var targetPID: pid_t = 0
+
     private func focusedElement() -> AXUIElement? {
-        guard let pid = AppMonitor.trueFrontmost()?.processIdentifier else { return nil }
+        let resolved = targetPID != 0 ? targetPID : AppMonitor.trueFrontmost()?.processIdentifier
+        guard let pid = resolved else { return nil }
         let app = AXUIElementCreateApplication(pid)
         AXUIElementSetMessagingTimeout(app, 0.2)
         var focused: CFTypeRef?

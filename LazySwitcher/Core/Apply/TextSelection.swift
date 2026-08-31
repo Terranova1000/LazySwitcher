@@ -19,8 +19,14 @@ enum TextSelection {
     /// synthetic path can still replace a selection there by typing over it, but
     /// we would not know what we were replacing, and converting text we cannot
     /// read is exactly how a password gets mangled.
-    static func current() -> Snapshot? {
-        guard let pid = AppMonitor.trueFrontmost()?.processIdentifier else { return nil }
+    /// - Parameter pid: the process to read from. Passed in rather than looked
+    ///   up here so that it is the same process the field decision was made
+    ///   about: two independent lookups can disagree, and when they do, the
+    ///   selection we read and rewrite belongs to an application the person is
+    ///   not typing into.
+    static func current(pid explicit: pid_t = 0) -> Snapshot? {
+        let resolved = explicit != 0 ? explicit : AppMonitor.trueFrontmost()?.processIdentifier
+        guard let pid = resolved else { return nil }
         let app = AXUIElementCreateApplication(pid)
         AXUIElementSetMessagingTimeout(app, 0.2)
 

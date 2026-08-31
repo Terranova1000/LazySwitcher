@@ -44,7 +44,11 @@ final class FocusMonitor {
     private var observedElement: AXUIElement?
     /// The element the caret is actually in, as opposed to what we know about it.
     private var focusedElement: AXUIElement?
-    private var observedPID: pid_t = 0
+    /// The process every decision in this monitor is about. Exposed so that
+    /// reading and writing text can be aimed at the same process the decision
+    /// was made about, rather than each asking the system separately and
+    /// possibly getting different answers.
+    private(set) var observedPID: pid_t = 0
 
     /// Apps whose text fields we classify by app rather than by AX role.
     var terminalBundleIDs: Set<String> = AppPolicyStore.lockedExclusions
@@ -122,11 +126,27 @@ final class FocusMonitor {
         wakeGeneration &+= 1
         isWaking = false
         fieldRole = .unknown
+        answeredWithWebContainer = false
+        descentTrace = "—"
     }
 
     // MARK: - Reading the focused element
 
-    func refresh(bundleID: String? = nil) {
+    /// - Parameter startsWakeLadder: whether a failed answer may schedule the
+    ///   retry ladder. The periodic self-check passes `false`: it is already a
+    ///   repetition, and letting it start a ladder every few seconds turns a
+    ///   quiet application into a stream of synchronous queries into another
+    ///   process — measured as a real cost in applications where the focused
+    ///   element is simply not a text field, which is most of them, most of the
+    ///   time.
+    func refresh(bundleID: String? = nil, startsWakeLadder: Bool = true) {
+        // First line, before every early return below. These describe the answer
+        // we are about to get; leaving a previous application's answer standing
+        // is how "the gesture is allowed here" followed the user out of Claude
+        // and into applications where it was not true.
+        answeredWithWebContainer = false
+        descentTrace = "—"
+
         let id = bundleID ?? AppMonitor.trueFrontmost()?.bundleIdentifier ?? ""
 
         // App-level classification first: it is certain, and it is cheap.
@@ -141,7 +161,7 @@ final class FocusMonitor {
             lastError = Self.describe(status)
             lastRole = "—"; lastSubrole = "—"
             publish(.unknown, element: nil)
-            scheduleWakeRetry(bundleID: id)
+            if startsWakeLadder { scheduleWakeRetry(bundleID: id) }
             return
         }
         lastError = "—"
@@ -174,7 +194,6 @@ final class FocusMonitor {
 
         var classified = Self.classify(role: role, subrole: subrole)
         var resolved = target
-        answeredWithWebContainer = false
 
         // A container, not a field. Ask it what *it* considers focused.
         //
@@ -189,7 +208,7 @@ final class FocusMonitor {
         // the container often enough to look broken, and nothing about the two
         // cases is visible from outside. Measured before the fix: 159 attempts
         // to wake the tree, none successful, while the answer was one query away.
-        if classified == .unknown {
+        if classified == .unknown, Self.webContainerRoles.contains(lastRole) {
             var trace: [String] = ["вход: \(lastRole)"]
             defer { descentTrace = trace.joined(separator: " → ") }
             var descended = 0
@@ -229,7 +248,8 @@ final class FocusMonitor {
         // A web area that will not name its focused element sometimes still
         // lists it. Bounded hard — two levels, the first few children — because
         // this runs on the main thread and a deep search of a page would be felt.
-        if classified == .unknown, let found = Self.findTextField(under: target, depth: 2) {
+        if classified == .unknown, Self.webContainerRoles.contains(lastRole),
+           let found = Self.findTextField(under: target, depth: 2) {
             classified = found.role
             lastRole = found.name
             resolved = found.element
@@ -241,7 +261,7 @@ final class FocusMonitor {
         }
 
         publish(classified, element: resolved)
-        if classified == .unknown { scheduleWakeRetry(bundleID: id) }
+        if classified == .unknown, startsWakeLadder { scheduleWakeRetry(bundleID: id) }
     }
 
     // MARK: - Waking Chromium up
@@ -340,18 +360,19 @@ final class FocusMonitor {
         }
     }
 
-    /// Roles that mean "this application has no field-level answer for us".
+    /// The one role that means "web content whose inner tree was not built".
     ///
-    /// `AXWebArea` and friends are web content whose inner tree was never built.
-    /// `AXApplication` is the application naming *itself* as the focused element,
-    /// which is the same statement made less politely.
+    /// Deliberately a single entry. Version 1.9 also listed `AXScrollArea`,
+    /// `AXGroup` and `AXApplication`, and every one of them was a mistake:
+    /// they are ordinary answers from ordinary native applications — a focused
+    /// message list, a focused button, nothing focused at all — and treating
+    /// them as "cannot identify the field" opened the gesture in places where
+    /// the only way to act is to send blind backspaces at whatever has focus.
+    /// In a mail message list that is not a failed correction, it is deletion.
     ///
-    /// A native application with a real text field never answers this way, so
-    /// treating these as "cannot identify" costs nothing there: if nothing is
-    /// focused, the gesture finds no text and does nothing regardless.
-    static let webContainerRoles: Set<String> = [
-        "AXWebArea", "AXScrollArea", "AXGroup", "AXApplication",
-    ]
+    /// `AXWebArea` is different in kind: it is text-bearing content that the
+    /// application has told us about but will not describe further.
+    static let webContainerRoles: Set<String> = ["AXWebArea"]
 
     /// Looks for a text field among the descendants. Bounded on purpose.
     private static func findTextField(under element: AXUIElement,
