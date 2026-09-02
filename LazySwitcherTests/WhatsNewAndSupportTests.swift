@@ -172,6 +172,15 @@ final class StoriesTests: XCTestCase {
         XCTAssertEqual(a.title, b.title)
     }
 
+    /// Починка ошибок историю не меняет: обновившись ради исправления, человек
+    /// должен увидеть ту же историю, а не решить, что вчерашняя ему померещилась.
+    func testPatchReleasesKeepTheStory() {
+        XCTAssertEqual(Stories.forVersion("1.11").title,
+                       Stories.forVersion("1.11.1").title)
+        XCTAssertEqual(Stories.forVersion("1.11").title,
+                       Stories.forVersion("1.11.7").title)
+    }
+
     /// Соседние версии не должны попадать на одну историю — иначе смысл
     /// чередования теряется. Первая формула чередовала две штуки из четырёх.
     func testConsecutiveVersionsRotate() {
@@ -181,10 +190,17 @@ final class StoriesTests: XCTestCase {
         XCTAssertEqual(Set(picked).count, 4, "четыре версии подряд дали \(picked)")
     }
 
-    /// У истории этой версии есть картинка — специально: релиз, в котором
-    /// истории появились, должен показывать их в полном виде.
-    func testCurrentVersionHasIllustratedStory() {
-        XCTAssertNotNil(Stories.forVersion("1.11").art)
+    /// Картинок пока нет ни у одной истории — они появятся, когда появятся
+    /// настоящие иллюстрации. Тест сторожит не отсутствие, а согласованность:
+    /// объявленная картинка обязана существовать (см. `testDeclaredArtExists`),
+    /// а окно обязано жить без неё.
+    func testStoriesWorkWithoutArtwork() {
+        for story in Stories.all where story.art == nil {
+            XCTAssertFalse(L(story.title).isEmpty)
+        }
+        let controller = WhatsNewWindowController(notes: "Заметки")
+        XCTAssertNotNil(controller.window)
+        controller.close()
     }
 
     /// Каждая история обязана иметь переведённые заголовок и текст. Ключ без

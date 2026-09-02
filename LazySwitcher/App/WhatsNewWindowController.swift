@@ -18,7 +18,7 @@ final class WhatsNewWindowController: NSWindowController {
 
     init(notes: String) {
         self.notes = notes
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 520, height: 720),
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 520, height: 620),
                               styleMask: [.titled, .closable], backing: .buffered, defer: false)
         window.title = L("whatsnew.window.title")
         window.center()
@@ -120,7 +120,7 @@ final class WhatsNewWindowController: NSWindowController {
         scroll.drawsBackground = false
         scroll.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
-            scroll.heightAnchor.constraint(greaterThanOrEqualToConstant: 380),
+            scroll.heightAnchor.constraint(greaterThanOrEqualToConstant: 300),
             scroll.widthAnchor.constraint(equalToConstant: 456),
         ])
 

@@ -1,9 +1,3 @@
-This window has changed. It used to list technical details nobody needs —
-now it is a short note about what changed, with a small story underneath.
-Stories about laziness: it has invented more than you would think.
-
-What's new:
-
 • The application no longer falls asleep with your Mac. After waking or
   restarting it would sometimes do nothing until you woke it with a
   double Shift.

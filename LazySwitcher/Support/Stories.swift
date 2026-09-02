@@ -17,8 +17,14 @@ enum Stories {
         let title: String
         /// Ключ текста.
         let body: String
-        /// Имя картинки в ресурсах, если она нарисована. Истории без картинки
-        /// показываются одним текстом — это нормально и выглядит нормально.
+        /// Имя картинки в ресурсах, если она есть.
+        ///
+        /// Сейчас нет ни одной, и это осознанно: нарисованная кодом виньетка
+        /// была отвергнута, а рисовать иллюстрации кодом — не то занятие, где
+        /// вторая попытка выходит лучше первой. Поле остаётся, потому что
+        /// подставить настоящую картинку должно быть можно одним файлом:
+        /// положить её в `Assets.xcassets` и назвать здесь. История без
+        /// картинки показывается одним текстом и выглядит нормально.
         let art: String?
     }
 
@@ -26,7 +32,7 @@ enum Stories {
     /// версии, и менять его задним числом — значит переписать историю у уже
     /// вышедших сборок.
     static let all: [Story] = [
-        Story(title: "story.zipper.title", body: "story.zipper.body", art: "story-zipper"),
+        Story(title: "story.zipper.title", body: "story.zipper.body", art: nil),
         Story(title: "story.remote.title", body: "story.remote.body", art: nil),
         Story(title: "story.virtues.title", body: "story.virtues.body", art: nil),
         Story(title: "story.sloth.title", body: "story.sloth.body", art: nil),
@@ -42,14 +48,19 @@ enum Stories {
         return all[index(for: version, count: all.count)]
     }
 
-    /// Веса подобраны так, чтобы соседние версии не попадали на одну историю.
+    /// Считается по старшим двум разрядам: **починка ошибок историю не меняет.**
+    ///
+    /// 1.11 и 1.11.1 показывают одно и то же. Иначе человек, обновившийся ради
+    /// исправления, открывает окно и видит вместо вчерашней истории другую — а
+    /// выглядит это не как задумка, а как будто что-то сломалось.
+    ///
+    /// Веса подобраны так, чтобы соседние выпуски не попадали на одну историю.
     /// Первая попытка складывала разряды с одинаковым шагом и чередовала всего
-    /// две истории из четырёх — проверено перебором, не на глаз.
+    /// две штуки из четырёх — проверено перебором, не на глаз.
     static func index(for version: String, count: Int) -> Int {
         let parts = version.split(whereSeparator: { !$0.isNumber }).compactMap { Int($0) }
         let major = parts.count > 0 ? parts[0] : 0
         let minor = parts.count > 1 ? parts[1] : 0
-        let patch = parts.count > 2 ? parts[2] : 0
-        return abs(major &* 31 &+ minor &* 7 &+ patch) % count
+        return abs(major &* 31 &+ minor &* 7) % count
     }
 }
