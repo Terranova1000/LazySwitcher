@@ -120,6 +120,7 @@ enum M0Report {
             row("слепых захватов отклонено", "\(delegate.blindCarriesRefused.value)")
             row("на паузе", delegate.isPaused ? "ДА — жест ничего не сделает" : "нет")
             row("окно «что нового»", delegate.whatsNewIsOpen ? "открыто" : "закрыто")
+            row("текст в нём", delegate.whatsNewTextVisible ? "виден" : "не виден")
             row("версия, показанная ранее", Settings.shared.lastSeenVersion ?? "—")
             row("ответил веб-контейнером", delegate.focus.answeredWithWebContainer ? "да" : "нет")
             row("жест разрешён", ctx.fieldRoleUnavailable ? "да (поле неопознаваемо)" : "по роли поля")

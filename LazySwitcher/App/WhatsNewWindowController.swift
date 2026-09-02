@@ -46,22 +46,43 @@ final class WhatsNewWindowController: NSWindowController {
             String(format: L("whatsnew.title"), ReleaseNotes.currentVersion))
         title.font = .systemFont(ofSize: 20, weight: .semibold)
 
-        // A text view rather than a label: release notes are as long as they
-        // need to be, and a window that cannot scroll would decide for them.
-        let text = NSTextView()
-        text.string = notes
-        text.isEditable = false
-        text.isSelectable = true
-        text.drawsBackground = false
-        text.font = .systemFont(ofSize: 13)
-        text.textContainerInset = NSSize(width: 4, height: 4)
+        // A wrapping label inside the scroll view, not an `NSTextView`.
+        //
+        // The first version used a bare `NSTextView()`, and it shipped with the
+        // window opening and no text in it. A text view created without a frame
+        // has no size and does not grow to fit its content unless it is told to
+        // — `isVerticallyResizable`, the text container's size, the tracking
+        // flags. The string was there the whole time; there was nowhere to draw
+        // it. A label wraps and reports its own height without any of that, and
+        // it is what the rest of this application already uses.
+        //
+        // The verification failed the same way the code did: the test asserted
+        // the window existed, which it did. It now looks for the text.
+        let body = NSTextField(wrappingLabelWithString: notes)
+        body.font = .systemFont(ofSize: 13)
+        body.isSelectable = true
+        body.translatesAutoresizingMaskIntoConstraints = false
+
+        let document = NSView()
+        document.translatesAutoresizingMaskIntoConstraints = false
+        document.addSubview(body)
+        NSLayoutConstraint.activate([
+            body.topAnchor.constraint(equalTo: document.topAnchor, constant: 4),
+            body.leadingAnchor.constraint(equalTo: document.leadingAnchor, constant: 4),
+            body.trailingAnchor.constraint(equalTo: document.trailingAnchor, constant: -4),
+            body.bottomAnchor.constraint(equalTo: document.bottomAnchor, constant: -4),
+            body.widthAnchor.constraint(equalToConstant: 440),
+        ])
 
         let scroll = NSScrollView()
-        scroll.documentView = text
+        scroll.documentView = document
         scroll.hasVerticalScroller = true
         scroll.drawsBackground = false
         scroll.translatesAutoresizingMaskIntoConstraints = false
-        scroll.heightAnchor.constraint(greaterThanOrEqualToConstant: 200).isActive = true
+        NSLayoutConstraint.activate([
+            scroll.heightAnchor.constraint(greaterThanOrEqualToConstant: 220),
+            scroll.widthAnchor.constraint(equalToConstant: 456),
+        ])
 
         let stack = NSStackView(views: [banner, title, scroll])
         stack.orientation = .vertical
@@ -135,5 +156,21 @@ final class WhatsNewWindowController: NSWindowController {
 
     @objc private func close(_ sender: Any?) {
         window?.close()
+    }
+
+    /// Diagnostic: is the text actually taking up space on screen?
+    ///
+    /// Exists because "the window opened" was mistaken for "the window works"
+    /// once already, and the difference was invisible from outside.
+    var notesAreVisible: Bool {
+        guard let root = window?.contentView else { return false }
+        var stack = [root]
+        while let view = stack.popLast() {
+            if let field = view as? NSTextField, field.stringValue == notes {
+                return field.frame.height > 1 && field.frame.width > 1
+            }
+            stack.append(contentsOf: view.subviews)
+        }
+        return false
     }
 }

@@ -1,20 +1,22 @@
-What's New — after every update you now see what changed, inside the
-application. You can open it again at any time: the menu bar icon →
-"What's New".
+1.10.1 — fixing yesterday's 1.10.
 
-The text ships inside the application rather than being fetched. It reads
-the same offline and with update checking turned off — the "not a single
-outgoing connection" rule still holds.
+The What's New window opened empty. The text was in the build; there was
+nowhere to draw it, because the text area was created with no size and
+stayed at zero. What I checked at the time was that the window opened — and
+it did. The test now looks for the text itself and fails when it is invisible.
 
-From earlier versions, in case you missed them:
+The window also no longer opens behind other applications: it is ordered in
+first and the application brought forward second. It used to be the other
+way round, so a windowless agent came forward before it had anything to show.
 
-1.9.4 — the space between two corrections in a row is no longer eaten, and
-being paused is no longer silent: pressing the hotkey while paused used to
-do nothing at all, which was indistinguishable from being broken.
+What 1.10 was about:
 
-1.9.3 — after the Mac slept, the application only woke up half way: the
-keyboard tap revived, but the watcher on the focused field stayed dead
-until you switched applications. Hence "it has to be woken with the hotkey".
+What's New — after every update the application tells you once what changed.
+To open it again: the menu bar icon → "What's New".
 
-1.9.2 — three bugs on macOS 26: an eaten line break, pausing itself because
-of one lost system event, and a disappearing menu bar icon.
+The text ships inside the application rather than being fetched. It reads the
+same offline and with update checking turned off — the "not a single outgoing
+connection" rule still holds.
+
+The support ask is written in full but switched off: with nowhere to send
+anyone, the button would be meaningless. One line turns it on.

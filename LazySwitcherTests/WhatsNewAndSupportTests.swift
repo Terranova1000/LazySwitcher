@@ -97,10 +97,53 @@ final class SupportPromptTests: XCTestCase {
 /// проявляется только при построении окна, а не при компиляции.
 final class WhatsNewWindowTests: XCTestCase {
 
+    /// Ищет строку среди всего, что окно реально рисует.
+    private func rendersText(_ needle: String, in controller: NSWindowController) -> Bool {
+        guard let root = controller.window?.contentView else { return false }
+        var stack = [root]
+        while let view = stack.popLast() {
+            if let field = view as? NSTextField, field.stringValue.contains(needle) {
+                // Текст, которому негде поместиться, — это тот же отсутствующий
+                // текст. Ровно так и выглядела первая версия этого окна.
+                view.layoutSubtreeIfNeeded()
+                return field.fittingSize.width > 1 && field.fittingSize.height > 1
+            }
+            if let text = view as? NSTextView, text.string.contains(needle) {
+                return text.fittingSize.height > 1
+            }
+            stack.append(contentsOf: view.subviews)
+        }
+        return false
+    }
+
     func testWindowBuilds() {
         let controller = WhatsNewWindowController(notes: "Строка первая\nСтрока вторая")
         XCTAssertNotNil(controller.window)
         XCTAssertFalse(controller.window?.title.isEmpty ?? true)
+        controller.close()
+    }
+
+    /// Главная проверка этого файла.
+    ///
+    /// Версия 1.10 вышла с окном, которое открывалось пустым: NSTextView без
+    /// заданного размера не показывает ничего. Прежний тест проверял, что окно
+    /// существует, — оно существовало. Этот проверяет, что текст видно.
+    func testNotesAreActuallyVisible() {
+        let controller = WhatsNewWindowController(notes: "Приметная строка для проверки")
+        controller.window?.layoutIfNeeded()
+        XCTAssertTrue(rendersText("Приметная строка", in: controller),
+                      "окно открылось, но текста в нём не видно")
+        controller.close()
+    }
+
+    /// И то же самое с настоящим текстом из сборки, а не с выдуманным.
+    func testBundledNotesAreVisible() throws {
+        let notes = try XCTUnwrap(ReleaseNotes.text())
+        let firstWords = String(notes.prefix(12))
+        let controller = WhatsNewWindowController(notes: notes)
+        controller.window?.layoutIfNeeded()
+        XCTAssertTrue(rendersText(firstWords, in: controller),
+                      "настоящие заметки не отрисовались")
         controller.close()
     }
 

@@ -882,6 +882,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// Diagnostic: whether the notes window is on screen right now.
     var whatsNewIsOpen: Bool { whatsNewWindow?.window?.isVisible ?? false }
+    var whatsNewTextVisible: Bool { whatsNewWindow?.notesAreVisible ?? false }
 
     @objc func showWhatsNew(_ sender: Any?) {
         presentWhatsNew()
@@ -900,8 +901,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // nothing.
         whatsNewWindow?.close()
         whatsNewWindow = WhatsNewWindowController(notes: notes)
-        NSApp.activate(ignoringOtherApps: true)
+        // Order the window in first, then activate. The other way round — which
+        // is what the first version did — asks an accessory application to come
+        // forward before it has a window to come forward with, and the window
+        // ends up behind whatever the person was doing. An update window nobody
+        // sees is the same as no update window.
         whatsNewWindow?.showWindow(nil)
+        whatsNewWindow?.window?.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
     }
 
     @objc func showAbout(_ sender: Any?) {
