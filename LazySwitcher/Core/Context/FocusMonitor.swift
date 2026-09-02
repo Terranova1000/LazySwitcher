@@ -56,6 +56,35 @@ final class FocusMonitor {
 
     // MARK: - Lifecycle
 
+    /// Registers again for the application we are already watching.
+    ///
+    /// `observe` refuses to repeat work for the same process, which is right
+    /// almost always and wrong after the machine has slept. An `AXObserver` is a
+    /// connection to another process, and connections do not survive sleep
+    /// reliably; the run-loop source can still be installed while nothing will
+    /// ever arrive through it again. Since the application in front after waking
+    /// is the same one as before, no activation notification arrives either, so
+    /// nothing ever asked for a new observer.
+    ///
+    /// The effect was the report we could not reproduce: after waking the Mac,
+    /// the application still received keys — the event tap has its own revival —
+    /// but its picture of the focused field was frozen at whatever was true
+    /// before the machine slept, and only pressing the hotkey repaired it,
+    /// because that path asks about the field again.
+    func reobserve(pid: pid_t, bundleID: String) {
+        guard pid != 0 else { return }
+        observedPID = 0          // defeat the "already watching this one" guard
+        observe(pid: pid, bundleID: bundleID)
+        reobserveCount &+= 1
+    }
+
+    /// Whether an observer is actually installed. False after a failed attempt,
+    /// which is worth retrying rather than living with for the session.
+    var hasObserver: Bool { observer != nil }
+
+    /// Diagnostic: how many times the observer had to be built again.
+    private(set) var reobserveCount = 0
+
     func observe(pid: pid_t, bundleID: String) {
         guard pid != observedPID else { return }
         stop()
@@ -76,7 +105,19 @@ final class FocusMonitor {
 
         guard result == .success, let created else {
             // Most likely .apiDisabled (-25211): our own access is not what the
-            // checkbox in System Settings claims. Say nothing, do nothing.
+            // checkbox in System Settings claims. Say nothing to the user.
+            //
+            // But do not record this process as observed. `observe` refuses to
+            // repeat itself for a pid it is already watching, so leaving the pid
+            // set here meant one failed attempt was final: no focus notification
+            // would ever arrive for this application again, however long it
+            // stayed in front. That is a real state at login, when this launches
+            // before the accessibility subsystem is ready to answer — the "it
+            // does not work after I turn the Mac on" half of the report.
+            //
+            // `observedElement` is kept: polling through `refresh` still works
+            // without an observer, and it is what the periodic self-check uses.
+            observedPID = 0
             fieldRole = .unknown
             return
         }

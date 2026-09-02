@@ -24,7 +24,7 @@ bad()  { say "$1" "✗ $2"; FAIL=1; }
 
 echo "── отладочные леса не должны существовать в релизе"
 SYMBOLS=$(strings "$BIN" 2>/dev/null || true)
-for needle in m5-selftest-run m4-selftest-run m0-sweep m0-report.txt m0-timeout-sweep; do
+for needle in m0-wake m5-selftest-run m4-selftest-run m0-sweep m0-report.txt m0-timeout-sweep; do
   if printf '%s' "$SYMBOLS" | grep -qF "$needle"; then
     bad "триггер «$needle»" "присутствует — леса попали в релиз"
   else

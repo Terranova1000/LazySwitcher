@@ -151,6 +151,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         guard !isRunningUnderTests else { return }
         menuBar = MenuBarController(delegate: self)
+        subscribeToWake()
 
         secureInput.onChange = { [weak self] enabled in
             guard let self else { return }
@@ -438,6 +439,63 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    /// Everything we believe about other processes is suspect after the machine
+    /// has slept, so all of it is derived again.
+    ///
+    /// The event tap revives itself (`KeyTapService` watches the same
+    /// notifications), but it was the only thing that did. The focused field,
+    /// the keyboard layouts, the accessibility observer — all of them are
+    /// answers other processes gave us before the machine slept, and none of
+    /// them is re-asked on its own, because waking up changes nothing that any
+    /// of them listens for: the application in front afterwards is the same one
+    /// as before, so no activation notification is sent.
+    ///
+    /// Each step here is cheap and safe to repeat, so this deliberately re-does
+    /// everything rather than trying to work out what actually broke.
+    private func subscribeToWake() {
+        let center = NSWorkspace.shared.notificationCenter
+        for name: NSNotification.Name in [NSWorkspace.didWakeNotification,
+                                          NSWorkspace.sessionDidBecomeActiveNotification,
+                                          NSWorkspace.screensDidWakeNotification] {
+            center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                self?.rederiveEverything()
+            }
+        }
+    }
+
+    #if DEBUG
+    /// Lets the wake path be exercised without actually sleeping the machine.
+    ///
+    /// Scaffolding: `scripts/audit-release.sh` fails the build if this string
+    /// survives into a release bundle.
+    private func checkWakeTrigger() {
+        let url = M0Report.url.deletingLastPathComponent().appendingPathComponent("m0-wake")
+        guard FileManager.default.fileExists(atPath: url.path) else { return }
+        try? FileManager.default.removeItem(at: url)
+        rederiveEverything()
+    }
+    #endif
+
+    private func rederiveEverything() {
+        // Whatever was typed around the sleep, we did not see all of it.
+        chain.clear()
+        undo.invalidate()
+        tap.invalidateBuffer(reason: .caretMoved)
+
+        apps.resync()
+        refreshLayouts()
+        if !apps.bundleID.isEmpty {
+            focus.reobserve(pid: apps.pid, bundleID: apps.bundleID)
+            focus.refresh(bundleID: apps.bundleID)
+            publishContext(bundleID: apps.bundleID, appName: apps.appName)
+        }
+        menuBar.reassert()
+        wakeRecoveries += 1
+        note("пробуждение — состояние собрано заново")
+    }
+
+    private(set) var wakeRecoveries = 0
+
     /// Puts right whatever quietly went wrong.
     ///
     /// Deliberately not clever: it re-derives state rather than working out why
@@ -450,10 +508,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // running. Two lines to re-assert it, once a second.
         menuBar.ensureVisible()
         ensureTapIsAlive()
+        #if DEBUG
+        checkWakeTrigger()
+        #endif
         inputSources.clearStaleExpectation()
         // Who is in front is the state most likely to be silently wrong, and the
         // cheapest to re-derive.
         apps.resync()
+
+        // An observer that was never created is not a permanent condition. The
+        // usual cause is asking too early — at login, before the accessibility
+        // subsystem answers — and the cure is simply to ask again.
+        if !focus.hasObserver, apps.pid != 0, !apps.bundleID.isEmpty,
+           Date().timeIntervalSince(lastObserverRetry) > 5 {
+            lastObserverRetry = Date()
+            focus.reobserve(pid: apps.pid, bundleID: apps.bundleID)
+        }
 
         // No layout pair means every word is unreadable. Rebuilding it needs a
         // layout change to arrive, and without a working replacement nothing
@@ -492,6 +562,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private var replacementStartedAt = Date.distantPast
     private var lastUnknownRetry = Date.distantPast
+    private var lastObserverRetry = Date.distantPast
     private var lastTapTick: UInt64 = 0
     private var lastTapTickAt = Date()
     private var lastTapRestart = Date.distantPast
