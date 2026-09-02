@@ -1,22 +1,18 @@
-1.10.1 — fixing yesterday's 1.10.
+This window has changed. It used to list technical details nobody needs —
+now it is a short note about what changed, with a small story underneath.
+Stories about laziness: it has invented more than you would think.
 
-The What's New window opened empty. The text was in the build; there was
-nowhere to draw it, because the text area was created with no size and
-stayed at zero. What I checked at the time was that the window opened — and
-it did. The test now looks for the text itself and fails when it is invisible.
+What's new:
 
-The window also no longer opens behind other applications: it is ordered in
-first and the application brought forward second. It used to be the other
-way round, so a windowless agent came forward before it had anything to show.
+• The application no longer falls asleep with your Mac. After waking or
+  restarting it would sometimes do nothing until you woke it with a
+  double Shift.
 
-What 1.10 was about:
+• Fixed the problems that showed up on macOS 26: the menu bar icon going
+  missing, line breaks being swallowed, and the application occasionally
+  switching itself off without saying so.
 
-What's New — after every update the application tells you once what changed.
-To open it again: the menu bar icon → "What's New".
+• The space between two corrections in a row no longer disappears.
 
-The text ships inside the application rather than being fetched. It reads the
-same offline and with update checking turned off — the "not a single outgoing
-connection" rule still holds.
-
-The support ask is written in full but switched off: with nowhere to send
-anyone, the button would be meaningless. One line turns it on.
+• Corrections are more careful in applications that will not let us check
+  our work: they now skip a word rather than damage the one beside it.

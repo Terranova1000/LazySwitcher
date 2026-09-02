@@ -18,7 +18,7 @@ final class WhatsNewWindowController: NSWindowController {
 
     init(notes: String) {
         self.notes = notes
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 520, height: 560),
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 520, height: 720),
                               styleMask: [.titled, .closable], backing: .buffered, defer: false)
         window.title = L("whatsnew.window.title")
         window.center()
@@ -39,7 +39,7 @@ final class WhatsNewWindowController: NSWindowController {
         banner.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
             banner.widthAnchor.constraint(equalToConstant: 456),
-            banner.heightAnchor.constraint(equalToConstant: 214),
+            banner.heightAnchor.constraint(equalToConstant: 178),
         ])
 
         let title = NSTextField(labelWithString:
@@ -61,17 +61,57 @@ final class WhatsNewWindowController: NSWindowController {
         let body = NSTextField(wrappingLabelWithString: notes)
         body.font = .systemFont(ofSize: 13)
         body.isSelectable = true
-        body.translatesAutoresizingMaskIntoConstraints = false
+
+        // Notes and story share one scrolling column, so a long story simply
+        // continues below rather than fighting the notes for a fixed height.
+        let column = NSStackView(views: [body])
+        column.orientation = .vertical
+        column.alignment = .leading
+        column.spacing = 14
+        column.translatesAutoresizingMaskIntoConstraints = false
+
+        let story = Stories.forVersion(ReleaseNotes.currentVersion)
+        column.addArrangedSubview(rule())
+
+        if let art = story.art, let image = NSImage(named: art) {
+            // Template art: drawn as a flat silhouette and tinted by the system,
+            // so it reads in both light and dark appearance without a second file.
+            image.isTemplate = true
+            let view = NSImageView(image: image)
+            view.imageScaling = .scaleProportionallyUpOrDown
+            view.contentTintColor = .secondaryLabelColor
+            view.translatesAutoresizingMaskIntoConstraints = false
+            NSLayoutConstraint.activate([
+                view.widthAnchor.constraint(equalToConstant: 400),
+                view.heightAnchor.constraint(equalToConstant: 147),
+            ])
+            column.addArrangedSubview(view)
+        }
+
+        let storyTitle = NSTextField(labelWithString: L(story.title))
+        storyTitle.font = .systemFont(ofSize: 15, weight: .semibold)
+        column.addArrangedSubview(storyTitle)
+
+        let storyBody = NSTextField(wrappingLabelWithString: L(story.body))
+        storyBody.font = .systemFont(ofSize: 13)
+        storyBody.textColor = .secondaryLabelColor
+        storyBody.isSelectable = true
+        column.addArrangedSubview(storyBody)
+
+        for label in [body, storyBody] {
+            label.translatesAutoresizingMaskIntoConstraints = false
+            label.widthAnchor.constraint(equalToConstant: 424).isActive = true
+        }
+        storyTitle.translatesAutoresizingMaskIntoConstraints = false
 
         let document = NSView()
         document.translatesAutoresizingMaskIntoConstraints = false
-        document.addSubview(body)
+        document.addSubview(column)
         NSLayoutConstraint.activate([
-            body.topAnchor.constraint(equalTo: document.topAnchor, constant: 4),
-            body.leadingAnchor.constraint(equalTo: document.leadingAnchor, constant: 4),
-            body.trailingAnchor.constraint(equalTo: document.trailingAnchor, constant: -4),
-            body.bottomAnchor.constraint(equalTo: document.bottomAnchor, constant: -4),
-            body.widthAnchor.constraint(equalToConstant: 440),
+            column.topAnchor.constraint(equalTo: document.topAnchor, constant: 4),
+            column.leadingAnchor.constraint(equalTo: document.leadingAnchor, constant: 4),
+            column.trailingAnchor.constraint(equalTo: document.trailingAnchor, constant: -4),
+            column.bottomAnchor.constraint(equalTo: document.bottomAnchor, constant: -4),
         ])
 
         let scroll = NSScrollView()
@@ -80,7 +120,7 @@ final class WhatsNewWindowController: NSWindowController {
         scroll.drawsBackground = false
         scroll.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
-            scroll.heightAnchor.constraint(greaterThanOrEqualToConstant: 220),
+            scroll.heightAnchor.constraint(greaterThanOrEqualToConstant: 380),
             scroll.widthAnchor.constraint(equalToConstant: 456),
         ])
 
@@ -107,17 +147,7 @@ final class WhatsNewWindowController: NSWindowController {
             row.orientation = .horizontal
             row.spacing = 10
 
-            // A plain view, not an NSBox: a default-initialised box draws a
-            // titled frame captioned «Название», which is where the mystery
-            // captions elsewhere in this app came from. A test enforces this.
-            let separator = NSView()
-            separator.wantsLayer = true
-            separator.layer?.backgroundColor = NSColor.separatorColor.cgColor
-            separator.translatesAutoresizingMaskIntoConstraints = false
-            NSLayoutConstraint.activate([
-                separator.widthAnchor.constraint(equalToConstant: 456),
-                separator.heightAnchor.constraint(equalToConstant: 1),
-            ])
+            let separator = rule()
 
             stack.addArrangedSubview(separator)
             stack.addArrangedSubview(ask)
@@ -141,6 +171,23 @@ final class WhatsNewWindowController: NSWindowController {
             done.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -20),
         ])
         window.contentView = content
+    }
+
+    /// A hairline, drawn as a plain view.
+    ///
+    /// Not an `NSBox`: a default-initialised box draws a titled frame captioned
+    /// «Название», which is where the mystery captions elsewhere in this
+    /// application came from. A test enforces the absence of `NSBox()`.
+    private func rule() -> NSView {
+        let line = NSView()
+        line.wantsLayer = true
+        line.layer?.backgroundColor = NSColor.separatorColor.cgColor
+        line.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            line.widthAnchor.constraint(equalToConstant: 424),
+            line.heightAnchor.constraint(equalToConstant: 1),
+        ])
+        return line
     }
 
     @objc private func openSupport(_ sender: Any?) {

@@ -181,3 +181,16 @@ Right after a correction, undoes it.";
 "support.body" = "Lazy Switcher is free and will stay free. If you find it useful, supporting the work helps keep it going.";
 "support.button" = "Support";
 "support.never" = "Don't ask again";
+
+/* Stories about laziness. One per version, shown in the What's New window. */
+"story.zipper.title" = "Somebody could not face lacing their boots";
+"story.zipper.body" = "In 1893 Whitcomb Judson patented a \"clasp locker\" and showed it at the Chicago World's Fair. The problem was dull and entirely relatable: boots of the day had two dozen hooks each, and fastening them every morning wore everyone down.\n\nHis device worked badly and jammed constantly. Another engineer at the same company, Gideon Sundback, reworked it into something that actually functioned in 1913 — and that is what fastens our jackets today.\n\nThe word \"zipper\" only arrived in 1923, as the name of a rubber galosh. It stuck to the fastener instead. For the sound.";
+
+"story.remote.title" = "The first remote was called Lazy Bones";
+"story.remote.body" = "In 1950 Zenith shipped the first television remote and named it Lazy Bones, with no embarrassment whatsoever. It was wired: to avoid getting out of the armchair you now had to run a cable across the room.\n\nPeople tripped over the cable, of course. Within a few years that produced wireless remotes — first using flashes of light, then ultrasound.\n\nSo laziness produced not one invention but two: the second to fix what the first had made awkward.";
+
+"story.virtues.title" = "Laziness is a programmer's first virtue";
+"story.virtues.body" = "Larry Wall, who created Perl, wrote that a good programmer has three great virtues, and the first of them is laziness.\n\nBy laziness he meant the opposite of idleness: the willingness to go to considerable effort so that less effort is needed overall. Writing a program that does the boring work for you is hard work, undertaken so that there will be no work later.\n\nLazy Switcher grew out of exactly that. Switching layouts by hand is not difficult. It is just unnecessary.";
+
+"story.sloth.title" = "A sloth is not lazy, it is economical";
+"story.sloth.body" = "Sloths are slow because of their diet, not their character. They eat leaves, leaves carry very little energy, and their metabolic rate is among the lowest of any mammal. There is simply nothing to move quickly on.\n\nThat same slowness protects them: a motionless sloth is hard to spot. Algae grow in their fur and lend it a greenish cast — camouflage that grows on you, literally.\n\nSo the slowness is not a shortcoming but a strategy. We rather like that approach.";

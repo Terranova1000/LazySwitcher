@@ -159,3 +159,50 @@ final class WhatsNewWindowTests: XCTestCase {
         XCTAssertNotNil(NSImage(named: "Banner"))
     }
 }
+
+/// Истории про лень.
+final class StoriesTests: XCTestCase {
+
+    /// Одна и та же сборка обязана показывать одну и ту же историю. Иначе
+    /// человек, открывший окно второй раз, увидит другую и решит, что первая
+    /// ему померещилась.
+    func testSameVersionAlwaysGivesTheSameStory() {
+        let a = Stories.forVersion("1.11")
+        let b = Stories.forVersion("1.11")
+        XCTAssertEqual(a.title, b.title)
+    }
+
+    /// Соседние версии не должны попадать на одну историю — иначе смысл
+    /// чередования теряется. Первая формула чередовала две штуки из четырёх.
+    func testConsecutiveVersionsRotate() {
+        let picked = ["1.11", "1.12", "1.13", "1.14"].map {
+            Stories.index(for: $0, count: Stories.all.count)
+        }
+        XCTAssertEqual(Set(picked).count, 4, "четыре версии подряд дали \(picked)")
+    }
+
+    /// У истории этой версии есть картинка — специально: релиз, в котором
+    /// истории появились, должен показывать их в полном виде.
+    func testCurrentVersionHasIllustratedStory() {
+        XCTAssertNotNil(Stories.forVersion("1.11").art)
+    }
+
+    /// Каждая история обязана иметь переведённые заголовок и текст. Ключ без
+    /// перевода отображается как сам ключ, и это видно сразу — но только тому,
+    /// кто открыл окно.
+    func testEveryStoryIsTranslated() {
+        for story in Stories.all {
+            XCTAssertNotEqual(L(story.title), story.title, "нет перевода: \(story.title)")
+            XCTAssertNotEqual(L(story.body), story.body, "нет перевода: \(story.body)")
+            XCTAssertGreaterThan(L(story.body).count, 120, "текст подозрительно короткий")
+        }
+    }
+
+    /// Картинки, объявленные в историях, должны существовать в сборке.
+    func testDeclaredArtExists() {
+        for story in Stories.all {
+            guard let art = story.art else { continue }
+            XCTAssertNotNil(NSImage(named: art), "нет картинки: \(art)")
+        }
+    }
+}
