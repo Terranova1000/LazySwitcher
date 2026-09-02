@@ -113,6 +113,29 @@ final class MenuBarController {
         redraw()
     }
 
+    /// Makes an invisible state visible for a moment.
+    ///
+    /// Called when somebody presses the hotkey while the application is paused.
+    /// The pause itself is shown only by the icon, and an icon is easy to miss —
+    /// especially in a menu bar that is full, and especially when the reason the
+    /// person is pressing the hotkey is that they already think nothing works.
+    /// Briefly putting a word next to the icon answers the question they are
+    /// actually asking, which is "why is nothing happening".
+    func explainPause() {
+        guard let button = item.button else { return }
+        button.alphaValue = 1.0
+        button.title = " " + L("menu.paused.short")
+        button.imagePosition = .imageLeading
+        pauseHintUntil = Date().addingTimeInterval(2.5)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { [weak self] in
+            guard let self, Date() >= pauseHintUntil else { return }
+            item.button?.title = ""
+            item.button?.imagePosition = .imageOnly
+        }
+    }
+
+    private var pauseHintUntil = Date.distantPast
+
     func update(paused active: Bool) {
         paused = active
         redraw()

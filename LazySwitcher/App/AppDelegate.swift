@@ -563,6 +563,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var replacementStartedAt = Date.distantPast
     private var lastUnknownRetry = Date.distantPast
     private var lastObserverRetry = Date.distantPast
+    let blindCarriesRefused = AtomicCounter()
     private var lastTapTick: UInt64 = 0
     private var lastTapTickAt = Date()
     private var lastTapRestart = Date.distantPast
@@ -766,7 +767,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             logDecision(String(format: "%d симв.: %@ Λ=%.2f",
                                typed.count, "\(plan)", evidence.perCharacter))
             return
-        case .convert(let carrying, let reason):
+        case .convert(let carryingRequested, let reason):
+            // Reaching back over earlier words is only safe on the route that
+            // checks what it is deleting. Without that check a run spanning
+            // several words multiplies the damage from one wrong idea about the
+            // text — and the wrong idea is not hypothetical: macOS autocorrection
+            // rewrites words on the same keystroke we act on.
+            let verified = replacer.hasVerifiedRoute(in: apps.bundleID)
+            let carrying = verified ? carryingRequested : 0
+            if carryingRequested > 0, !verified { blindCarriesRefused.bump() }
             let rescued = Array(chain.entries.suffix(carrying))
             var from = typed + (trailing ?? "")
             var to = alternative + (trailing ?? "")
@@ -895,7 +904,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case .doubleTapShift:
             // Undo first: pressing the hotkey right after a replacement means
             // "that was wrong", not "do it again".
-            guard !isPaused else { return }
+            guard !isPaused else {
+                // Say something. A paused application answering the hotkey with
+                // perfect silence is indistinguishable from a broken one, and
+                // that is how it was reported: "it stops working after a while,
+                // and the hotkey does nothing either". Pausing is only ever
+                // visible in the menu bar, which is exactly what people miss.
+                note("на паузе — оба Shift вместе, чтобы продолжить")
+                menuBar.explainPause()
+                NSSound.beep()
+                return
+            }
             if undo.isAvailable, let pending = undo.consume(currentGeneration: tap.inputGeneration.value) {
                 revert(pending)
                 return

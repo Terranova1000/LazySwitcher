@@ -139,6 +139,7 @@ final class TextReplacer {
         }
 
         guard let synthetic else { return Outcome(strategy: .synthetic, succeeded: false) }
+        awaitRendered((original as NSString).length)
         // Count characters, not UTF-16 units: one backspace removes one glyph,
         // and counting units would over-delete anything outside the BMP.
         log("synth \(original.count)→\(replacement.count)")
@@ -147,6 +148,53 @@ final class TextReplacer {
     }
 
     func forget(_ bundleID: String) { accessibilityFailures.removeValue(forKey: bundleID) }
+
+    /// Whether the route that checks itself is expected to work here.
+    ///
+    /// Callers use this to decide how much text they are willing to rewrite at
+    /// once. The synthetic route deletes by counting and cannot look at what it
+    /// is deleting, so a run spanning several words there is several times the
+    /// damage when our idea of the text is wrong.
+    func hasVerifiedRoute(in bundleID: String) -> Bool { !isBlacklisted(bundleID) }
+
+    /// Waits for the text we are about to delete backwards over to be on screen.
+    ///
+    /// The synthetic route sends a count of backspaces and trusts that many
+    /// characters are there. We act on the space that ends a word, and an
+    /// application that has not finished inserting that space yet leaves the
+    /// caret one position short — so the count runs one past the word and takes
+    /// the space before it. Typing `ghbdtn` then `руддщ` came out as
+    /// «Приветhello»: the space between them was eaten and the user's own space
+    /// arrived afterwards.
+    ///
+    /// macOS autocorrection makes this worse rather than causing it: it also
+    /// fires on the space that ends a word, and rewrites text underneath us at
+    /// exactly the moment we are measuring it.
+    ///
+    /// The caret position can be read in many applications where the text itself
+    /// cannot, so this often confirms the length even where the verified route
+    /// was unavailable. Where nothing can be read, a slightly longer wait is all
+    /// that is left — better than measuring against text that is not there yet.
+    private func awaitRendered(_ length: Int) {
+        guard length > 0, let element = focusedElement() else { usleep(blindSettleDelay); return }
+        for _ in 0..<4 {
+            var raw: CFTypeRef?
+            guard AXUIElementCopyAttributeValue(element, kAXSelectedTextRangeAttribute as CFString,
+                                                &raw) == .success,
+                  let value = raw, CFGetTypeID(value) == AXValueGetTypeID()
+            else { usleep(blindSettleDelay); return }
+            var caret = CFRange()
+            guard AXValueGetValue(value as! AXValue, .cfRange, &caret) else {
+                usleep(blindSettleDelay); return
+            }
+            if caret.location >= length { return }
+            usleep(15_000)
+        }
+    }
+
+    /// Extra wait before deleting text we could not measure. Short enough to be
+    /// invisible, long enough for an application to finish drawing a space.
+    private let blindSettleDelay: UInt32 = 35_000
 
     // MARK: - Accessibility route
 

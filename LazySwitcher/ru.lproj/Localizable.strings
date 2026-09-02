@@ -167,3 +167,6 @@ ghbdtn → привет     руддщ → hello
 "update.error.ownSignature" = "не удалось прочитать собственную подпись";
 "update.error.unreadableSignature" = "у скачанного приложения нет читаемой подписи";
 "menu.status.updateAvailable" = "Есть версия %@";
+
+/* Короткая подсказка рядом со значком, когда нажали хоткей на паузе */
+"menu.paused.short" = "на паузе";

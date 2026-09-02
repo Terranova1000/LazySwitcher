@@ -167,3 +167,6 @@ Right after a correction, undoes it.";
 "update.error.ownSignature" = "could not read our own signature";
 "update.error.unreadableSignature" = "the downloaded application has no readable signature";
 "menu.status.updateAvailable" = "Version %@ is available";
+
+/* Short hint next to the icon when the hotkey is pressed while paused */
+"menu.paused.short" = "paused";
