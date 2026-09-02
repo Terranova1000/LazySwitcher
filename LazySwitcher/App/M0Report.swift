@@ -119,6 +119,8 @@ enum M0Report {
             row("наблюдатель установлен", delegate.focus.hasObserver ? "да" : "нет")
             row("слепых захватов отклонено", "\(delegate.blindCarriesRefused.value)")
             row("на паузе", delegate.isPaused ? "ДА — жест ничего не сделает" : "нет")
+            row("окно «что нового»", delegate.whatsNewIsOpen ? "открыто" : "закрыто")
+            row("версия, показанная ранее", Settings.shared.lastSeenVersion ?? "—")
             row("ответил веб-контейнером", delegate.focus.answeredWithWebContainer ? "да" : "нет")
             row("жест разрешён", ctx.fieldRoleUnavailable ? "да (поле неопознаваемо)" : "по роли поля")
             row("замена разрешена", flag(ctx.allowsAutomaticReplacement))

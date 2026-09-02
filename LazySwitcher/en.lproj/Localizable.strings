@@ -170,3 +170,14 @@ Right after a correction, undoes it.";
 
 /* Short hint next to the icon when the hotkey is pressed while paused */
 "menu.paused.short" = "paused";
+
+/* What's new window */
+"whatsnew.window.title" = "What's New";
+"whatsnew.title" = "What's new in %@";
+"whatsnew.done" = "Got it";
+"menu.whatsnew" = "What's New";
+
+/* Support ask. Not shown yet — see SupportPrompt */
+"support.body" = "Lazy Switcher is free and will stay free. If you find it useful, supporting the work helps keep it going.";
+"support.button" = "Support";
+"support.never" = "Don't ask again";

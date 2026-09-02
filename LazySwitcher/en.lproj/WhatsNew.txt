@@ -1,0 +1,20 @@
+What's New — after every update you now see what changed, inside the
+application. You can open it again at any time: the menu bar icon →
+"What's New".
+
+The text ships inside the application rather than being fetched. It reads
+the same offline and with update checking turned off — the "not a single
+outgoing connection" rule still holds.
+
+From earlier versions, in case you missed them:
+
+1.9.4 — the space between two corrections in a row is no longer eaten, and
+being paused is no longer silent: pressing the hotkey while paused used to
+do nothing at all, which was indistinguishable from being broken.
+
+1.9.3 — after the Mac slept, the application only woke up half way: the
+keyboard tap revived, but the watcher on the focused field stayed dead
+until you switched applications. Hence "it has to be woken with the hotkey".
+
+1.9.2 — three bugs on macOS 26: an eaten line break, pausing itself because
+of one lost system event, and a disappearing menu bar icon.

@@ -282,6 +282,11 @@ final class MenuBarController {
         preferences.target = target
         menu.addItem(preferences)
 
+        let whatsNew = NSMenuItem(title: L("menu.whatsnew"),
+                                  action: #selector(AppDelegate.showWhatsNew(_:)), keyEquivalent: "")
+        whatsNew.target = delegate
+        menu.addItem(whatsNew)
+
         let about = NSMenuItem(title: L("menu.about"),
                                action: #selector(AppDelegate.showAbout(_:)), keyEquivalent: "")
         about.target = target

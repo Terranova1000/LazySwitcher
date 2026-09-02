@@ -152,6 +152,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard !isRunningUnderTests else { return }
         menuBar = MenuBarController(delegate: self)
         subscribeToWake()
+        SupportPrompt.noteLaunch()
+        // Read before anything else can change it: the check records the version
+        // it saw, so asking twice would answer false the second time.
+        let hasNewsToShow = ReleaseNotes.shouldPresentAutomatically()
 
         secureInput.onChange = { [weak self] enabled in
             guard let self else { return }
@@ -269,6 +273,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         M5SelfTest.watchForTrigger(delegate: self)
         #endif
         tap.setHotkeyStyle(Settings.shared.hotkeyStyle)
+        presentWhatsNewIfUpdated(hasNewsToShow)
 
         // Only if the user asked for it, and at most weekly.
         UpdateChecker.checkOnScheduleIfEnabled { [weak self] outcome in
@@ -295,6 +300,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menuBar.update(permissions: state.looksStuck ? .stuck : .missing)
         showOnboarding()
         watchForPermission()
+    }
+
+    /// After an update, and only then. Deferred a moment so it lands after the
+    /// menu bar and any permission window have settled — arriving on top of the
+    /// screen that is asking for Accessibility would bury the more important of
+    /// the two.
+    private func presentWhatsNewIfUpdated(_ shouldShow: Bool) {
+        guard shouldShow else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
+            guard let self, onboarding == nil else { return }
+            presentWhatsNew(automatic: true)
+        }
     }
 
     /// Shown once, on the very first launch, even when permissions are already
@@ -859,6 +876,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if settingsWindow == nil { settingsWindow = SettingsWindowController(app: self) }
         NSApp.activate(ignoringOtherApps: true)
         settingsWindow?.showWindow(nil)
+    }
+
+    private var whatsNewWindow: WhatsNewWindowController?
+
+    /// Diagnostic: whether the notes window is on screen right now.
+    var whatsNewIsOpen: Bool { whatsNewWindow?.window?.isVisible ?? false }
+
+    @objc func showWhatsNew(_ sender: Any?) {
+        presentWhatsNew()
+    }
+
+    /// - Parameter automatic: true when this is the once-per-version showing
+    ///   rather than somebody choosing it from the menu. Only that case is
+    ///   allowed to stay silent when there are no notes to show.
+    private func presentWhatsNew(automatic: Bool = false) {
+        guard let notes = ReleaseNotes.text() else {
+            if !automatic { NSSound.beep() }
+            return
+        }
+        // A fresh window each time: the notes are read once, at build time, and
+        // keeping a controller alive for something shown a few times a year buys
+        // nothing.
+        whatsNewWindow?.close()
+        whatsNewWindow = WhatsNewWindowController(notes: notes)
+        NSApp.activate(ignoringOtherApps: true)
+        whatsNewWindow?.showWindow(nil)
     }
 
     @objc func showAbout(_ sender: Any?) {

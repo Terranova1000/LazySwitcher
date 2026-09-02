@@ -23,6 +23,10 @@ final class Settings {
         case lastUpdateCheck = "lastUpdateCheck"
         case bannerHidden = "bannerHidden"
         case hasSeenWelcome = "hasSeenWelcome"
+        case lastSeenVersion = "lastSeenVersion"
+        case firstRunDate = "firstRunDate"
+        case supportAskedAt = "supportAskedAt"
+        case supportSilenced = "supportSilenced"
     }
 
     private init() {
@@ -92,6 +96,35 @@ final class Settings {
     var lastUpdateCheck: Date? {
         get { defaults.object(forKey: Key.lastUpdateCheck.rawValue) as? Date }
         set { defaults.set(newValue, forKey: Key.lastUpdateCheck.rawValue) }
+    }
+
+    // MARK: - What's new, and asking for support
+
+    /// The version whose notes have already been shown.
+    ///
+    /// Nil on a genuinely first run, which is how "do not greet a new user with
+    /// a changelog for a version they have never used" is decided.
+    var lastSeenVersion: String? {
+        get { defaults.string(forKey: Key.lastSeenVersion.rawValue) }
+        set { defaults.set(newValue, forKey: Key.lastSeenVersion.rawValue) }
+    }
+
+    /// When this copy was first run. Written once and never again.
+    var firstRunDate: Date? {
+        get { defaults.object(forKey: Key.firstRunDate.rawValue) as? Date }
+        set { defaults.set(newValue, forKey: Key.firstRunDate.rawValue) }
+    }
+
+    /// When support was last asked about. Nil means never.
+    var supportAskedAt: Date? {
+        get { defaults.object(forKey: Key.supportAskedAt.rawValue) as? Date }
+        set { defaults.set(newValue, forKey: Key.supportAskedAt.rawValue) }
+    }
+
+    /// The person said not to ask again. Permanent, and meant to be.
+    var supportSilenced: Bool {
+        get { defaults.bool(forKey: Key.supportSilenced.rawValue) }
+        set { defaults.set(newValue, forKey: Key.supportSilenced.rawValue) }
     }
 
     // MARK: - Sound
