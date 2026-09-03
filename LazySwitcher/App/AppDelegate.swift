@@ -199,6 +199,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             chain.clear()
             undo.invalidate()
             tap.invalidateBuffer(reason: .mouseClick)
+
+            // A click is usually somebody putting the caret where they are about
+            // to type, so it is the right moment to find out what they clicked
+            // into — before the first word rather than after it.
+            //
+            // Deferred a moment: asked immediately, the application answers about
+            // the field the caret has just left. Rate-limited because a click can
+            // arrive as fast as somebody can press the button, and each question
+            // is a round trip into another process.
+            guard Date().timeIntervalSince(lastClickFieldRetry) > 0.4 else { return }
+            lastClickFieldRetry = Date()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { [weak self] in
+                guard let self, !apps.bundleID.isEmpty,
+                      !policies.hidesFieldRoles(apps.bundleID) else { return }
+                focus.refresh(bundleID: apps.bundleID, startsWakeLadder: false)
+                publishContext(bundleID: apps.bundleID, appName: apps.appName)
+            }
         }
         mouse.start()
 
@@ -581,6 +598,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var lastUnknownRetry = Date.distantPast
     private var lastObserverRetry = Date.distantPast
     let blindCarriesRefused = AtomicCounter()
+    /// Words dropped because the context did not allow acting.
+    let refusedByContext = AtomicCounter()
+    /// Times the field answered only when asked again at a word boundary.
+    let lateFieldAnswers = AtomicCounter()
+    private var lastCommitFieldRetry = Date.distantPast
+    private var lastClickFieldRetry = Date.distantPast
     private var lastTapTick: UInt64 = 0
     private var lastTapTickAt = Date()
     private var lastTapRestart = Date.distantPast
@@ -680,9 +703,43 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // The veto runs on the rendered word, before any scoring — it is cheap
         // and it is the layer that keeps us out of trouble.
-        let verdict = VetoGate.evaluate(.init(word: reading.typed, context: context.current))
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
+
+            // Ask about the field before judging the word — and on this thread,
+            // where asking is allowed.
+            //
+            // The role of the focused field is answered by another process, and
+            // the answer often arrives later than the first word typed after
+            // clicking into that field. Until it does, the veto below refuses on
+            // `.fieldRole` and the word is dropped without a trace.
+            //
+            // That is exactly how this was reported: "sometimes it does not
+            // fire; I erase the word, type it again, and then it works".
+            // Retyping worked not because anything about the word changed, but
+            // because erasing and retyping takes a few seconds and the answer
+            // turned up in between.
+            //
+            // A word boundary is a rare enough moment to afford one synchronous
+            // question, and it is asked only when we genuinely do not know.
+            // Secure input and "leave this application alone" are answers, not
+            // gaps, and never come here.
+            if context.current.fieldRole == .unknown, !context.current.isSecureInput,
+               !apps.bundleID.isEmpty, !policies.hidesFieldRoles(apps.bundleID),
+               Date().timeIntervalSince(lastCommitFieldRetry) > 1 {
+                lastCommitFieldRetry = Date()
+                focus.refresh(bundleID: apps.bundleID, startsWakeLadder: false)
+                publishContext(bundleID: apps.bundleID, appName: apps.appName)
+                if context.current.fieldRole == .text { lateFieldAnswers.bump() }
+            }
+
+            // Judged with the context we have just confirmed, not with one read
+            // on another queue a moment ago. The veto and the action have to
+            // agree about the world; when they were computed at different times
+            // they could disagree, and the disagreement was invisible.
+            let verdict = VetoGate.evaluate(.init(word: reading.typed,
+                                                  context: context.current))
+
             lastPair = (typed: reading.typed, alternative: reading.alternative)
             lastCommitted = Committed(keys: word, terminator: terminator, at: Date())
             // Any new typing means the previous replacement is no longer the
@@ -777,7 +834,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let (plan, evidence, entry) = planner.plan(input, chain: chain)
 
         defer { chain.append(entry) }
-        guard context.current.allowsAutomaticReplacement else { return }
+
+        // The field was already re-checked before the veto, so by here the
+        // context is as good as it is going to get.
+        guard context.current.allowsAutomaticReplacement else {
+            // Never silently again. A word dropped without a word about it is
+            // indistinguishable from a broken application, and this particular
+            // silence cost several releases to find.
+            refusedByContext.bump()
+            remember("\(typed.count) симв.: контекст запретил — поле "
+                     + "\(context.current.fieldRole), политика \(context.current.policy)")
+            return
+        }
 
         switch plan {
         case .keep, .wait:

@@ -118,6 +118,8 @@ enum M0Report {
             row("пересозданий наблюдателя", "\(delegate.focus.reobserveCount)")
             row("наблюдатель установлен", delegate.focus.hasObserver ? "да" : "нет")
             row("слепых захватов отклонено", "\(delegate.blindCarriesRefused.value)")
+            row("слов отклонено контекстом", "\(delegate.refusedByContext.value)")
+            row("поле ответило с опозданием", "\(delegate.lateFieldAnswers.value)")
             row("на паузе", delegate.isPaused ? "ДА — жест ничего не сделает" : "нет")
             row("окно «что нового»", delegate.whatsNewIsOpen ? "открыто" : "закрыто")
             row("текст в нём", delegate.whatsNewTextVisible ? "виден" : "не виден")

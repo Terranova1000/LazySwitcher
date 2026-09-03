@@ -1,3 +1,15 @@
+• Fixed: the automatic correction sometimes did nothing for the first word,
+  and you had to erase it and type it again.
+
+  The erasing was not what helped. The application asks the system what kind
+  of field the cursor is in, and the answer sometimes arrived later than you
+  could type that first word. Until it arrives, touching the text is not
+  allowed — it might be a password. Erasing and retyping takes a few seconds,
+  and the answer turned up in between.
+
+  It now asks about the field right after a click, and once more at the end
+  of a word if the answer is still missing.
+
 • The application no longer falls asleep with your Mac. After waking or
   restarting it would sometimes do nothing until you woke it with a
   double Shift.
@@ -7,6 +19,3 @@
   switching itself off without saying so.
 
 • The space between two corrections in a row no longer disappears.
-
-• Corrections are more careful in applications that will not let us check
-  our work: they now skip a word rather than damage the one beside it.
