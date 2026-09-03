@@ -122,6 +122,10 @@ enum M0Report {
             row("поле ответило с опозданием", "\(delegate.lateFieldAnswers.value)")
             row("снимок раскладок устарел", "\(delegate.staleLayoutSnapshots.value)")
             row("пустых таблиц отвергнуто", "\(delegate.keyMapper.unusableTables)")
+            row("слов дождались поля", "\(delegate.fieldWaitsRewarded.value)")
+            row("слов не дождались", "\(delegate.fieldWaitsAbandoned.value)")
+            row("пробегов укорочено", "\(delegate.shrunkRuns.value)")
+            row("замен «уже сделано»", "\(delegate.replacer.alreadyDone)")
             row("раскладка в снимке", delegate.currentLayouts.map {
                 "\($0.sourceLanguage) → \($0.targetLanguage)" } ?? "—")
             row("раскладка на самом деле", InputSourceService.currentLayout()

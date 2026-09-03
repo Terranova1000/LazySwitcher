@@ -87,6 +87,39 @@ final class KeyMapper {
 
     func invalidate() { cache.removeAll() }
 
+    /// Re-types a piece of existing text as if the other layout had been active,
+    /// leaving alone anything that layout cannot express.
+    ///
+    /// The stricter `keystrokes(of:in:)` refuses the whole string if a single
+    /// character has no key — right when converting a word we watched being
+    /// typed, because a hole there means our idea of the text is wrong. It is
+    /// the wrong rule for a selection: somebody highlighting a sentence they
+    /// typed in the wrong layout does not expect it to be declined because it
+    /// ends in an em dash, contains an ellipsis, or spans two lines.
+    ///
+    /// So unmappable characters pass through untouched — spaces, newlines,
+    /// typographic punctuation, emoji — and everything else is converted around
+    /// them. `mapped` reports how many characters actually changed hands, so the
+    /// caller can tell a real conversion from a string that was simply copied.
+    func convert(_ text: String, from source: Table, to target: Table) -> (text: String, mapped: Int) {
+        var result = ""
+        result.reserveCapacity(text.count)
+        var mapped = 0
+        for character in text {
+            guard let stroke = source.keystroke(for: character),
+                  let rendered = target.character(keyCode: stroke.keyCode,
+                                                  shift: stroke.shift, option: stroke.option),
+                  !rendered.isEmpty
+            else {
+                result.append(character)
+                continue
+            }
+            result += rendered
+            mapped += 1
+        }
+        return (result, mapped)
+    }
+
     /// Reads existing text back into the keystrokes that produced it.
     ///
     /// Returns nil if any character has no key in this layout — a partial answer

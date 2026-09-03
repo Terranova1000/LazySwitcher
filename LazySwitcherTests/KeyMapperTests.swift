@@ -248,3 +248,72 @@ final class LayoutTableValidityTests: XCTestCase {
         XCTAssertTrue(again.isUsable)
     }
 }
+
+/// Перевод выделенного текста между раскладками.
+///
+/// Отдельно от построчного разбора набранного: у выделения другие правила.
+/// Человек выделяет фразу целиком, вместе со знаками препинания и переносами, и
+/// отказывать ей из-за одного незнакомого символа — значит не работать вовсе.
+final class SelectionConversionTests: XCTestCase {
+
+    private var en: KeyMapper.Table!
+    private var ru: KeyMapper.Table!
+    private let mapper = KeyMapper()
+
+    override func setUpWithError() throws {
+        for source in InputSourceService.enabledKeyboardLayouts() {
+            guard let language = InputSourceService.primaryLanguage(of: source),
+                  let table = mapper.table(for: source) else { continue }
+            if language == "en", en == nil { en = table }
+            if language == "ru", ru == nil { ru = table }
+        }
+        try XCTSkipIf(en == nil || ru == nil, "нужны обе раскладки, ru и en")
+    }
+
+    func testConvertsAWholePhrase() {
+        let (text, mapped) = mapper.convert("ghbdtn", from: en, to: ru)
+        XCTAssertEqual(text, "привет")
+        XCTAssertEqual(mapped, 6)
+    }
+
+    /// Главное отличие от строгого разбора: незнакомые символы пропускаются, а
+    /// не роняют всю фразу.
+    func testUnknownCharactersPassThroughInsteadOfRefusing() {
+        // Типографика и эмодзи: клавиш для них в раскладке нет.
+        for extra in ["—", "…", "🙂"] {
+            let (text, mapped) = mapper.convert("ghbdtn\(extra)", from: en, to: ru)
+            XCTAssertEqual(text, "привет\(extra)", "символ \(extra) не должен ронять фразу")
+            XCTAssertEqual(mapped, 6, "непереводимый символ не должен считаться переведённым")
+        }
+        // Перенос и табуляция клавиши имеют, поэтому переводятся сами в себя.
+        // Важно здесь одно: фраза не отвергается и символ остаётся на месте.
+        for extra in ["\n", "\t"] {
+            let (text, _) = mapper.convert("ghbdtn\(extra)", from: en, to: ru)
+            XCTAssertEqual(text, "привет\(extra)")
+        }
+    }
+
+    /// Пробелы и переносы сохраняются на своих местах — фраза остаётся фразой.
+    func testKeepsShapeOfAMultilinePhrase() {
+        let (text, _) = mapper.convert("ghbdtn rfr ltkf\nb xnj", from: en, to: ru)
+        XCTAssertEqual(text.filter { $0 == "\n" }.count, 1, "перенос строки обязан уцелеть")
+        XCTAssertEqual(text.filter { $0 == " " }.count, 3, "пробелы обязаны остаться на местах")
+        XCTAssertEqual(text.split(whereSeparator: { $0 == " " || $0 == "\n" }).count, 5)
+    }
+
+    /// Ничего не перевелось — значит и менять нечего. Вызывающий по этому
+    /// отличает настоящий перевод от простого копирования.
+    func testReportsWhenNothingWasMapped() {
+        let (text, mapped) = mapper.convert("🙂—…", from: en, to: ru)
+        XCTAssertEqual(text, "🙂—…")
+        XCTAssertEqual(mapped, 0)
+    }
+
+    /// Перевод туда и обратно возвращает исходное — иначе повторное применение
+    /// портило бы текст.
+    func testRoundTrip() {
+        let (there, _) = mapper.convert("ghbdtn, rfr ltkf?", from: en, to: ru)
+        let (back, _) = mapper.convert(there, from: ru, to: en)
+        XCTAssertEqual(back, "ghbdtn, rfr ltkf?")
+    }
+}

@@ -1,24 +1,21 @@
-• Fixed: the application did nothing until you switched the language by hand.
+• The big one: corrections were being applied and recorded as failures.
 
-  Your hint about the language switch was exactly right. The application
-  needs a layout table — what each key produces. The system does not always
-  hand that over: right after launch the request can come back empty. An
-  empty table was remembered permanently, and from then on every word read
-  as empty and was silently dropped. Only switching the language by hand
-  cleared it — which is why that helped, and why it came back in the next
-  application.
+  The text changed correctly, but internally it counted as a failure — so the
+  keyboard layout was never switched. You fixed a word and carried on typing
+  in the same wrong layout, and the next correction came out wrong. That was
+  the "works every other time" problem.
 
-  The table is now checked before it is remembered. An empty one is not
-  kept, and the next attempt builds it again.
+• A word is no longer thrown away when the application has not yet said what
+  the cursor is in. It waits for the answer and fires when it arrives.
 
-• Layouts are re-read when you switch applications. macOS remembers a
-  layout per application, and we were not asking.
+  Pressing double Shift used to help — not because it woke anything up, but
+  because it was the only path that asked properly. Now both do.
 
-• Fixed: the automatic correction sometimes did nothing for the first word,
-  so you had to erase it and type it again. The application asks the system
-  what kind of field the cursor is in, and the answer arrived too late.
+• Select any phrase and press double Shift to switch its layout. It works
+  with commas, dashes, line breaks and emoji: one unfamiliar character used
+  to cancel the whole thing. And it works as many times in a row as you like
+  — a second press could previously undo the first correction instead of
+  converting the new selection.
 
-• The application no longer falls asleep with your Mac.
-
-• Fixed the macOS 26 problems: the menu bar icon going missing, line breaks
-  being swallowed, and the application switching itself off.
+• When there is less text before the cursor than we meant to replace, the
+  current word is corrected on its own instead of nothing happening.

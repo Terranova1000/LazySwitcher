@@ -27,6 +27,12 @@ final class TextReplacer {
     struct Outcome {
         let strategy: Strategy
         let succeeded: Bool
+        /// There was less text in front of the caret than we meant to replace.
+        ///
+        /// Our idea of the text is too long, not the application's answer wrong,
+        /// so the useful response is to try again with less of it rather than to
+        /// give up on the word entirely.
+        var runDidNotFit = false
     }
 
     /// What the accessibility route concluded.
@@ -41,6 +47,11 @@ final class TextReplacer {
         case replaced
         case notSupported
         case mismatch
+        /// Fewer characters before the caret than the run we were asked to
+        /// replace. Distinguished from `mismatch` because the cure is different:
+        /// a mismatch says we cannot trust this route here, while this says we
+        /// asked for too much and should ask for less.
+        case tooLongForField
     }
 
     private let synthetic: SyntheticEventSource?
@@ -82,6 +93,9 @@ final class TextReplacer {
     /// Applications also get better with time rather than worse: an accessibility
     /// tree that was not built when we first asked usually is later (Н35), so an
     /// answer from thirty seconds ago should not decide the next hour.
+    /// Diagnostic: replacements found already applied when we looked again.
+    private(set) var alreadyDone = 0
+
     private var accessibilityFailures: [String: Date] = [:]
     private static let failureMemory: TimeInterval = 60
 
@@ -133,6 +147,13 @@ final class TextReplacer {
                 // is lost per app, once, and then it works.
                 accessibilityFailures[bundleID] = Date()
                 return Outcome(strategy: .accessibility, succeeded: false)
+            case .tooLongForField:
+                // Not the application's fault and not a reason to stop trusting
+                // it: we asked to replace more text than exists. Say so, so the
+                // caller can ask for less — losing the whole correction because
+                // the carried neighbours did not fit is how a good decision
+                // turned into nothing happening at all.
+                return Outcome(strategy: .accessibility, succeeded: false, runDidNotFit: true)
             case .notSupported:
                 accessibilityFailures[bundleID] = Date()
             }
@@ -249,7 +270,10 @@ final class TextReplacer {
                   let retryRange = retryValue, CFGetTypeID(retryRange) == AXValueGetTypeID(),
                   AXValueGetValue(retryRange as! AXValue, .cfRange, &caret),
                   caret.location >= length
-            else { lastAXReason = "каретка на \(caret.location), нужно \(length)"; return .mismatch }
+            else {
+                lastAXReason = "каретка на \(caret.location), нужно \(length)"
+                return .tooLongForField
+            }
         }
         _ = length
         length = (original as NSString).length
@@ -272,7 +296,34 @@ final class TextReplacer {
                                             &selectedValue) == .success,
               let selected = selectedValue as? String
         else { return giveUp(.notSupported, "нет поддержки") }
-        guard selected == original else { return giveUp(.mismatch, "выделилось не то: \(selected.count) симв. вместо \(original.count)") }
+        if selected != original {
+            // Already done, by us, a moment ago.
+            //
+            // The retry above runs the whole routine a second time, and an
+            // application that wrote the replacement but answered slowly the
+            // first time round shows the *converted* text here. Reporting that
+            // as a failure was wrong in a way nobody could see: the correction
+            // was on screen and correct, while the application below concluded
+            // it had failed — so it did not switch the layout, did not arm the
+            // undo, and did not mark the word as converted, leaving the next
+            // word to reach back over text that was no longer what it thought.
+            //
+            // From the outside: the word gets fixed, the keyboard stays in the
+            // wrong layout, and the correction after it goes wrong. Which is
+            // what "it works every other time" looked like.
+            guard selected == replacement else {
+                return giveUp(.mismatch,
+                              "выделилось не то: \(selected.count) симв. вместо \(original.count)")
+            }
+            alreadyDone += 1
+            lastAXReason = "уже заменено"
+            var restore = originalCaret
+            restore.location = originalCaret.location
+            if let value = AXValueCreate(.cfRange, &restore) {
+                AXUIElementSetAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, value)
+            }
+            return .replaced
+        }
 
         // The last point at which nothing has been written yet. A failure here
         // is genuinely "this app does not support it", and falling through to

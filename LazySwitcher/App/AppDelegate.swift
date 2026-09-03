@@ -638,6 +638,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let lateFieldAnswers = AtomicCounter()
     /// Times the layout snapshot was found describing a layout we had left.
     let staleLayoutSnapshots = AtomicCounter()
+    /// Words that waited for the field answer and got it.
+    let fieldWaitsRewarded = AtomicCounter()
+    /// Words that waited and were let go.
+    let fieldWaitsAbandoned = AtomicCounter()
+    /// Runs that were too long for the field and were retried on one word.
+    let shrunkRuns = AtomicCounter()
     private var lastCommitFieldRetry = Date.distantPast
     private var lastClickFieldRetry = Date.distantPast
     private var lastTapTick: UInt64 = 0
@@ -715,8 +721,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// M1–M3 end to end: a word ended, check it is allowed to be touched at all,
     /// then render it in the active layout and in the other one. Deciding which
     /// reading is right is M5; applying the change is M4.
-    private func evaluate(_ word: [KeyRecord], terminator: UInt16) {
-        wordsCommitted.bump()
+    private func evaluate(_ word: [KeyRecord], terminator: UInt16, isRetry: Bool = false) {
+        if !isRetry { wordsCommitted.bump() }
         // Captured here, before any hop. Everything downstream compares against it.
         let generation = tap.inputGeneration.value
         guard let reading = read(word) else {
@@ -788,6 +794,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 // remembered. The length rule governs what we may *do*, not what
                 // we may *know*.
                 lastVetoReason = nil
+            case .vetoed(.fieldRole):
+                // Not a judgement about the word — an absence of information.
+                //
+                // Every other veto is a decision: this looks like a password,
+                // this is a path, this application is off limits. `.fieldRole`
+                // only says the application has not told us what the cursor is
+                // in yet, and that is a question that answers itself a moment
+                // later. Throwing the word away for it is why this kept being
+                // reported as unreliable: the answer arrived, just after we had
+                // stopped caring.
+                //
+                // So the word waits instead. Nothing is typed over it — the
+                // generation check below proves that — and the text is still on
+                // screen, so acting when the answer arrives is as safe as acting
+                // now would have been.
+                lastVetoReason = .fieldRole
+                if isRetry {
+                    // Уже ждали и не дождались.
+                    wordsVetoed.bump()
+                    chain.clear()
+                } else {
+                    scheduleFieldRetry(word, terminator: terminator,
+                                       generation: generation, attempt: 1)
+                }
+                return
             case .vetoed(let reason):
                 // A safety veto — a password shape, an address, a path. Break the
                 // chain: whatever this is, it must not be swept into a run later.
@@ -912,7 +943,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // +1 because the current word is appended by the `defer` below, so
             // by the time the replacement finishes the run ends one past here.
             applyRun(from: from, to: to, target: target, marking: carrying + 1,
-                     endingAt: chain.recordedCount + 1, generation: generation)
+                     endingAt: chain.recordedCount + 1, generation: generation,
+                     soloFallback: carrying > 0
+                        ? (typed + (trailing ?? ""), alternative + (trailing ?? ""))
+                        : nil)
         }
     }
 
@@ -922,8 +956,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// each have to be correct about where the caret is after the previous one,
     /// and the whole point of the chain is that these words sit next to each
     /// other, so the run is a single known string.
+    /// - Parameter soloFallback: the same replacement without the carried
+    ///   neighbours. Used when the assembled run turns out to be longer than the
+    ///   text actually in front of the caret — which happens whenever our
+    ///   picture of the earlier words is stale. Replacing the current word alone
+    ///   is both safe and what the person was expecting; abandoning everything,
+    ///   which is what used to happen, looks exactly like the application not
+    ///   working.
     private func applyRun(from: String, to: String, target: TISInputSource,
-                          marking count: Int, endingAt boundary: Int, generation: UInt64) {
+                          marking count: Int, endingAt boundary: Int, generation: UInt64,
+                          soloFallback: (from: String, to: String)? = nil) {
         let bundleID = context.currentCold.bundleID
         guard !isReplacing else { note("пропущено: предыдущая замена ещё идёт"); return }
         replacementStartedAt = Date()
@@ -940,10 +982,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 DispatchQueue.main.async { self.isReplacing = false; self.note("пропущено: текст изменился") }
                 return
             }
-            let outcome = replacer.replace(original: from, with: to, in: bundleID)
+            var outcome = replacer.replace(original: from, with: to, in: bundleID)
+            var applied = (from: from, to: to)
+            var marked = count
+            if !outcome.succeeded, outcome.runDidNotFit, let solo = soloFallback {
+                // The run did not fit. Ask for just the word that was actually
+                // typed — the neighbours we carried are evidently not where we
+                // thought they were.
+                self.shrunkRuns.bump()
+                outcome = replacer.replace(original: solo.from, with: solo.to, in: bundleID)
+                applied = solo
+                marked = 1
+            }
+            let finalOutcome = outcome, finalApplied = applied, finalMarked = marked
             DispatchQueue.main.async {
                 self.isReplacing = false
-                guard outcome.succeeded else { self.note("замена не удалась"); return }
+                guard finalOutcome.succeeded else { self.note("замена не удалась"); return }
+                let outcome = finalOutcome
+                let from = finalApplied.from, to = finalApplied.to
+                let count = finalMarked
                 self.replacementsMade.bump()
                 self.note("\(outcome.strategy.rawValue): \(from.count) → \(to.count) симв.")
                 self.chain.markConverted(count: count, endingAt: boundary)
@@ -1022,6 +1079,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         settingsWindow?.showAboutPane()
     }
 
+    /// Waits for the application to say what the cursor is in, then tries again.
+    ///
+    /// Asks the way the hotkey asks — with the retry ladder — because that is
+    /// the difference people kept noticing: "I press the hotkey and then it
+    /// starts working". The gesture was not waking anything up; it was simply
+    /// the only path that asked properly.
+    ///
+    /// Bounded on every side: at most two further attempts, roughly two thirds
+    /// of a second in total, and abandoned the moment anything at all is typed.
+    private func scheduleFieldRetry(_ word: [KeyRecord], terminator: UInt16,
+                                    generation: UInt64, attempt: Int) {
+        guard attempt <= 2 else { fieldWaitsAbandoned.bump(); return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + (attempt == 1 ? 0.2 : 0.45)) {
+            [weak self] in
+            guard let self else { return }
+            // Anything typed since means the text we were going to replace is no
+            // longer the text in front of the caret. Let it go.
+            guard tap.inputGeneration.value == generation else { return }
+            guard !isPaused, !apps.bundleID.isEmpty,
+                  !policies.hidesFieldRoles(apps.bundleID) else { return }
+
+            focus.refresh(bundleID: apps.bundleID)
+            publishContext(bundleID: apps.bundleID, appName: apps.appName)
+
+            guard context.current.fieldRole == .text else {
+                scheduleFieldRetry(word, terminator: terminator,
+                                   generation: generation, attempt: attempt + 1)
+                return
+            }
+            fieldWaitsRewarded.bump()
+            evaluate(word, terminator: terminator, isRetry: true)
+        }
+    }
+
     /// Renders a run of keystrokes in the active layout and in the other one.
     private struct Reading {
         let typed: String
@@ -1067,6 +1158,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 note("на паузе — оба Shift вместе, чтобы продолжить")
                 menuBar.explainPause()
                 NSSound.beep()
+                return
+            }
+            // A selection comes first, before the undo.
+            //
+            // Highlighting text and pressing the hotkey is an instruction about
+            // *that* text, and it cannot mean "undo what you did a moment ago" —
+            // somebody who wants the previous correction back does not select
+            // something else first. Checking undo first meant that fixing two
+            // phrases in a row undid the first one instead of converting the
+            // second, which is what "it only works a few times" was.
+            if let selection = TextSelection.current(pid: focus.observedPID),
+               !selection.text.isEmpty {
+                convertSelection(selection)
                 return
             }
             if undo.isAvailable, let pending = undo.consume(currentGeneration: tap.inputGeneration.value) {
@@ -1138,13 +1242,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // Read the text back into the keys that would have produced it, then ask
         // what those keys mean in the other layout.
-        guard let keys = keyMapper.keystrokes(of: selection.text, in: currentTable),
-              let converted = keyMapper.render(keys, with: otherTable) else {
-            note("в выделении есть символы, которых нет в раскладке")
+        // Character by character, leaving alone what the layout cannot express.
+        //
+        // The strict route refused the whole selection over one character it did
+        // not recognise — an em dash, an ellipsis, a smart quote, an emoji, a
+        // line break. For a word we watched being typed that caution is right;
+        // for a sentence somebody highlighted by hand it is just a refusal, and
+        // the request was that this "should simply work".
+        let (converted, mapped) = keyMapper.convert(selection.text,
+                                                    from: currentTable, to: otherTable)
+        guard mapped > 0, converted != selection.text else {
+            note("в выделении нечего менять")
             NSSound.beep()
             return
         }
-        guard converted != selection.text else { note("менять нечего"); NSSound.beep(); return }
 
         let hot = context.current
         // The safety context still applies in full: a selection inside a password
