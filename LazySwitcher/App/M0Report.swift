@@ -120,6 +120,12 @@ enum M0Report {
             row("слепых захватов отклонено", "\(delegate.blindCarriesRefused.value)")
             row("слов отклонено контекстом", "\(delegate.refusedByContext.value)")
             row("поле ответило с опозданием", "\(delegate.lateFieldAnswers.value)")
+            row("снимок раскладок устарел", "\(delegate.staleLayoutSnapshots.value)")
+            row("пустых таблиц отвергнуто", "\(delegate.keyMapper.unusableTables)")
+            row("раскладка в снимке", delegate.currentLayouts.map {
+                "\($0.sourceLanguage) → \($0.targetLanguage)" } ?? "—")
+            row("раскладка на самом деле", InputSourceService.currentLayout()
+                .flatMap { InputSourceService.primaryLanguage(of: $0) } ?? "—")
             row("на паузе", delegate.isPaused ? "ДА — жест ничего не сделает" : "нет")
             row("окно «что нового»", delegate.whatsNewIsOpen ? "открыто" : "закрыто")
             row("текст в нём", delegate.whatsNewTextVisible ? "виден" : "не виден")

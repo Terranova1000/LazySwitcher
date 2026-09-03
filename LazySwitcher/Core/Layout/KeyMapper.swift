@@ -37,6 +37,23 @@ final class KeyMapper {
             reverse[character]
         }
 
+        /// Did this table actually come out of a keyboard layout?
+        ///
+        /// A real layout fills well over a hundred slots. A handful means the
+        /// layout data was not readable at the moment we asked — it happens
+        /// right after launch and just after a layout is activated — and every
+        /// word rendered through such a table comes out as nothing, so every
+        /// word is refused for what look like good reasons.
+        ///
+        /// Worth checking because the answer used to be cached. One bad moment
+        /// poisoned that layout for the rest of the session, and the only thing
+        /// that cleared it was switching the language by hand: exactly the
+        /// "it does not work until I switch the language once" report.
+        var isUsable: Bool {
+            guard !reverse.isEmpty else { return false }
+            return entries.reduce(0) { $1 == nil ? $0 : $0 + 1 } >= 40
+        }
+
         fileprivate static func index(keyCode: UInt16, shift: Bool, option: Bool) -> Int {
             Int(keyCode) * 4 + (shift ? 1 : 0) + (option ? 2 : 0)
         }
@@ -54,9 +71,19 @@ final class KeyMapper {
         guard let id = InputSourceService.identifier(of: source) else { return nil }
         if let cached = cache[id] { return cached }
         guard let built = Self.buildTable(for: source, id: id) else { return nil }
+        // Only remember an answer worth remembering. Caching an empty table made
+        // one unlucky moment permanent; refusing to cache it costs a rebuild and
+        // lets the next attempt succeed.
+        guard built.isUsable else {
+            unusableTables += 1
+            return nil
+        }
         cache[id] = built
         return built
     }
+
+    /// Diagnostic: how many times a layout answered with nothing usable.
+    private(set) var unusableTables = 0
 
     func invalidate() { cache.removeAll() }
 

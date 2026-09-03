@@ -203,3 +203,48 @@ final class CapsLockRenderingTests: XCTestCase {
         XCTAssertEqual(mapper.render([KeyRecord(keyCode: 0x2B, capsLock: true)], with: ru), "Б")
     }
 }
+
+/// Таблица раскладки, которая ничего не содержит, не должна попадать в кэш.
+///
+/// Это причина жалобы «не работает, пока один раз не переключишь язык».
+/// Раскладка отдаёт свои данные не всегда: сразу после запуска и сразу после
+/// активации раскладки запрос может вернуть пустоту. Пустая таблица рендерит
+/// каждое слово в ничто, и каждое слово отклоняется по внешне разумной причине.
+/// Раньше такая таблица запоминалась навсегда, а сбрасывал кэш только
+/// `invalidate()` — то есть ручная смена языка.
+final class LayoutTableValidityTests: XCTestCase {
+
+    /// Настоящая раскладка обязана проходить проверку — иначе лекарство хуже
+    /// болезни: годные таблицы перестанут кэшироваться и всё замедлится.
+    func testRealLayoutsAreConsideredUsable() throws {
+        let mapper = KeyMapper()
+        var checked = 0
+        for source in InputSourceService.enabledKeyboardLayouts() {
+            guard let table = mapper.table(for: source) else { continue }
+            XCTAssertTrue(table.isUsable, "настоящая раскладка признана негодной")
+            checked += 1
+        }
+        try XCTSkipIf(checked == 0, "на этой машине нет доступных раскладок")
+    }
+
+    /// Годная таблица кэшируется: второй запрос обязан вернуть то же самое без
+    /// пересборки. Проверяется по идентичности содержимого, а не по времени.
+    func testUsableTablesAreCached() throws {
+        let mapper = KeyMapper()
+        let source = try XCTUnwrap(InputSourceService.currentLayout())
+        let first = try XCTUnwrap(mapper.table(for: source))
+        let second = try XCTUnwrap(mapper.table(for: source))
+        XCTAssertEqual(first.layoutID, second.layoutID)
+        XCTAssertEqual(mapper.unusableTables, 0, "годная раскладка не должна отвергаться")
+    }
+
+    /// После сброса кэша таблица собирается заново и снова годна.
+    func testRebuildsAfterInvalidate() throws {
+        let mapper = KeyMapper()
+        let source = try XCTUnwrap(InputSourceService.currentLayout())
+        _ = try XCTUnwrap(mapper.table(for: source))
+        mapper.invalidate()
+        let again = try XCTUnwrap(mapper.table(for: source))
+        XCTAssertTrue(again.isUsable)
+    }
+}

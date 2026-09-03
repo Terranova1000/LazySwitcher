@@ -49,7 +49,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var layouts: InputSourceService.LayoutPair?
     private var layoutsLock = os_unfair_lock_s()
 
-    private var currentLayouts: InputSourceService.LayoutPair? {
+    var currentLayouts: InputSourceService.LayoutPair? {
         os_unfair_lock_lock(&layoutsLock)
         defer { os_unfair_lock_unlock(&layoutsLock) }
         return layouts
@@ -175,6 +175,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             tap.invalidateBuffer(reason: .appChanged)
             focus.observe(pid: pid, bundleID: bundleID)
             publishContext(bundleID: bundleID, appName: name)
+
+            // Re-read the layouts: macOS restores a per-application input source
+            // when you switch applications, so the layout we are in can change
+            // without anybody touching the layout key.
+            //
+            // Nothing here used to do that. If the change notification did not
+            // reach us — or reached us before the switch had finished — the
+            // snapshot went on describing the previous application's layout, and
+            // every word after that was rendered through the wrong table: both
+            // readings came out as nonsense, neither scored, and the word was
+            // dropped in silence.
+            //
+            // From the outside that is "it does not work in a new chat until I
+            // switch the language once" — switching the language by hand is what
+            // finally rebuilt the snapshot.
+            //
+            // Deferred a moment because the restoration is not finished when the
+            // activation notification arrives; asked immediately, TIS still
+            // answers with the layout we are leaving.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
+                self?.refreshLayouts()
+            }
         }
         focus.onFocusChanged = { [weak self] _, caretMoved in
             guard let self else { return }
@@ -562,7 +584,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // No layout pair means every word is unreadable. Rebuilding it needs a
         // layout change to arrive, and without a working replacement nothing
         // changes the layout — a closed loop only an outside event breaks.
-        if currentLayouts == nil { refreshLayouts() }
+        // Rebuild when it is missing — and also when it has quietly stopped
+        // describing reality. A snapshot of the wrong layout is worse than none:
+        // a missing one at least says so, while a wrong one reads every word
+        // through the wrong table and refuses each of them for what look like
+        // good reasons.
+        if currentLayouts == nil {
+            refreshLayouts()
+        } else if let pair = currentLayouts,
+                  let now = InputSourceService.currentLayout(),
+                  InputSourceService.identifier(of: now) != pair.source.layoutID {
+            staleLayoutSnapshots.bump()
+            refreshLayouts()
+        }
 
         // A field we could not classify. Ask again — Electron builds its
         // accessibility tree lazily, and the answer unavailable a moment ago is
@@ -602,6 +636,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let refusedByContext = AtomicCounter()
     /// Times the field answered only when asked again at a word boundary.
     let lateFieldAnswers = AtomicCounter()
+    /// Times the layout snapshot was found describing a layout we had left.
+    let staleLayoutSnapshots = AtomicCounter()
     private var lastCommitFieldRetry = Date.distantPast
     private var lastClickFieldRetry = Date.distantPast
     private var lastTapTick: UInt64 = 0
