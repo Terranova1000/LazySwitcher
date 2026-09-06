@@ -1,21 +1,25 @@
-• The big one: corrections were being applied and recorded as failures.
+Fixing what I broke in yesterday's 1.12.
 
-  The text changed correctly, but internally it counted as a failure — so the
-  keyboard layout was never switched. You fixed a word and carried on typing
-  in the same wrong layout, and the next correction came out wrong. That was
-  the "works every other time" problem.
+• Selections work again — and now they really do.
+
+  Conversion always went "out of the currently active layout". But what you
+  select is precisely the text typed in the *other* one, and by the time you
+  notice, the keyboard has usually been switched back. So the English layout
+  was being asked to explain Russian letters, recognised nothing, and the
+  whole phrase was refused with a beep.
+
+  The direction is now read from the text itself. Select anything, press
+  double Shift, and it converts either way.
+
+• The hotkey no longer needs a second press. The selection check had jumped
+  ahead of finding out what the cursor is in, so the first press landed on a
+  field we did not know yet.
+
+From 1.12, in case you missed it:
+
+• Corrections were being applied and recorded as failures — so the keyboard
+  layout was never switched. You fixed a word, carried on typing in the same
+  wrong layout, and the next correction came out wrong.
 
 • A word is no longer thrown away when the application has not yet said what
-  the cursor is in. It waits for the answer and fires when it arrives.
-
-  Pressing double Shift used to help — not because it woke anything up, but
-  because it was the only path that asked properly. Now both do.
-
-• Select any phrase and press double Shift to switch its layout. It works
-  with commas, dashes, line breaks and emoji: one unfamiliar character used
-  to cancel the whole thing. And it works as many times in a row as you like
-  — a second press could previously undo the first correction instead of
-  converting the new selection.
-
-• When there is less text before the cursor than we meant to replace, the
-  current word is corrected on its own instead of nothing happening.
+  the cursor is in. It waits for the answer.

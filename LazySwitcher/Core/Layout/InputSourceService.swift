@@ -32,6 +32,10 @@ final class InputSourceService {
         let sourceLanguage: String
         let targetLanguage: String
         let targetInputSource: TISInputSource
+        /// The layout that is active right now. Carried for the same reason as
+        /// the target: converting a selection can go either way, and the
+        /// keyboard should end up in whichever layout the corrected text is in.
+        let sourceInputSource: TISInputSource
     }
 
     private static func requireMainThread(_ function: StaticString = #function) {

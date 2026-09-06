@@ -687,7 +687,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let pair = InputSourceService.LayoutPair(source: currentTable, target: otherTable,
                                                  sourceLanguage: sourceLanguage,
                                                  targetLanguage: targetLanguage,
-                                                 targetInputSource: other)
+                                                 targetInputSource: other,
+                                                 sourceInputSource: current)
         os_unfair_lock_lock(&layoutsLock)
         layouts = pair
         os_unfair_lock_unlock(&layoutsLock)
@@ -1160,6 +1161,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 NSSound.beep()
                 return
             }
+            // Ask about the field first of all.
+            //
+            // This used to happen further down, and moving the selection check
+            // above it was a mistake: the selection path returns without ever
+            // reaching the refresh, so the first press landed on a field we did
+            // not know yet and was refused. The second press worked because the
+            // periodic check had answered in between — "it fires on the second
+            // press", exactly as reported.
+            if focus.fieldRole == .unknown, !apps.bundleID.isEmpty {
+                focus.refresh(bundleID: apps.bundleID)
+                publishContext(bundleID: apps.bundleID, appName: apps.appName)
+            }
+
             // A selection comes first, before the undo.
             //
             // Highlighting text and pressing the hotkey is an instruction about
@@ -1176,20 +1190,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if undo.isAvailable, let pending = undo.consume(currentGeneration: tap.inputGeneration.value) {
                 revert(pending)
                 return
-            }
-            // Ask about the field again before deciding, rather than trusting
-            // what we learned when the application was activated. In Electron
-            // applications that answer is often `.unknown` — the accessibility
-            // tree for the page had not been built yet — and nothing arrives
-            // later to correct it. Refusing the gesture on a stale answer is the
-            // worst outcome available: the person asked for something explicitly
-            // and got silence.
-            //
-            // Affordable here precisely because it is a gesture: it happens when
-            // a human presses Shift twice, not on every keystroke.
-            if focus.fieldRole == .unknown, !apps.bundleID.isEmpty {
-                focus.refresh(bundleID: apps.bundleID)
-                publishContext(bundleID: apps.bundleID, appName: apps.appName)
             }
             convertOnHotkey()
         }
@@ -1242,15 +1242,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // Read the text back into the keys that would have produced it, then ask
         // what those keys mean in the other layout.
-        // Character by character, leaving alone what the layout cannot express.
+        // Which way to convert is read from the text, not from the keyboard.
         //
-        // The strict route refused the whole selection over one character it did
-        // not recognise — an em dash, an ellipsis, a smart quote, an emoji, a
-        // line break. For a word we watched being typed that caution is right;
-        // for a sentence somebody highlighted by hand it is just a refusal, and
-        // the request was that this "should simply work".
-        let (converted, mapped) = keyMapper.convert(selection.text,
-                                                    from: currentTable, to: otherTable)
+        // This was the bug that made selections "almost never work". The whole
+        // point of selecting text is that it is in the *wrong* alphabet, and by
+        // the time somebody notices, the keyboard has usually been switched back
+        // to the right one. Converting "out of the currently active layout" then
+        // asks the English table to explain the Cyrillic letters in «руддщ»,
+        // finds nothing it recognises, and refuses with a beep.
+        //
+        // So both directions are tried and the one that actually explains the
+        // text wins. Neither explaining it means there is genuinely nothing to
+        // do here.
+        //
+        // Character by character, leaving alone what no layout can express — an
+        // em dash, an ellipsis, an emoji, a line break. For a word we watched
+        // being typed that strictness is right; for a sentence highlighted by
+        // hand it is just a refusal.
+        let (converted, mapped, useForward) =
+            keyMapper.convertEitherWay(selection.text, first: currentTable, second: otherTable)
+        // Where the keyboard should end up: after fixing text that was typed in
+        // the other layout, the layout to carry on in is that text's own.
+        let landing = useForward ? pair.targetInputSource : pair.sourceInputSource
+
         guard mapped > 0, converted != selection.text else {
             note("в выделении нечего менять")
             NSSound.beep()
@@ -1285,7 +1299,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self.tap.clearBufferAfterReplacement()
                 self.undo.arm(original: selection.text, replacement: converted,
                               bundleID: bundleID, generation: self.tap.inputGeneration.value)
-                if Settings.shared.switchLayoutAfterReplacement { self.inputSources.select(other) }
+                if Settings.shared.switchLayoutAfterReplacement { self.inputSources.select(landing) }
                 self.playFeedback()
             }
         }

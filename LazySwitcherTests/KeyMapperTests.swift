@@ -317,3 +317,59 @@ final class SelectionConversionTests: XCTestCase {
         XCTAssertEqual(back, "ghbdtn, rfr ltkf?")
     }
 }
+
+/// Выбор направления перевода для выделенного текста.
+///
+/// Здесь была поломка, из-за которой выделение «почти всегда не работало»:
+/// перевод шёл всегда из активной раскладки, а выделяют как раз то, что набрано
+/// в другой — и к моменту, когда человек это заметил, клавиатура обычно уже
+/// переключена обратно.
+final class ConversionDirectionTests: XCTestCase {
+
+    private var en: KeyMapper.Table!
+    private var ru: KeyMapper.Table!
+    private let mapper = KeyMapper()
+
+    override func setUpWithError() throws {
+        for source in InputSourceService.enabledKeyboardLayouts() {
+            guard let language = InputSourceService.primaryLanguage(of: source),
+                  let table = mapper.table(for: source) else { continue }
+            if language == "en", en == nil { en = table }
+            if language == "ru", ru == nil { ru = table }
+        }
+        try XCTSkipIf(en == nil || ru == nil, "нужны обе раскладки, ru и en")
+    }
+
+    /// Активна русская, выделен латинский текст: переводить надо из английской.
+    func testFindsLatinTextWhileRussianIsActive() {
+        let result = mapper.convertEitherWay("ghbdtn", first: ru, second: en)
+        XCTAssertEqual(result.text, "привет")
+        XCTAssertFalse(result.usedFirst, "направление выбрано не по тексту")
+    }
+
+    /// Активна английская, выделен кириллический текст — тот самый случай,
+    /// который раньше отвергался с сигналом ошибки.
+    func testFindsCyrillicTextWhileEnglishIsActive() {
+        let result = mapper.convertEitherWay("руддщ", first: en, second: ru)
+        XCTAssertEqual(result.text, "hello")
+        XCTAssertFalse(result.usedFirst)
+    }
+
+    /// И наоборот — когда раскладка совпадает с текстом, ничего не ломается.
+    func testWorksWhenLayoutMatchesTheText() {
+        XCTAssertEqual(mapper.convertEitherWay("ghbdtn", first: en, second: ru).text, "привет")
+        XCTAssertEqual(mapper.convertEitherWay("руддщ", first: ru, second: en).text, "hello")
+    }
+
+    /// Фраза со знаками препинания и переносом — направление всё равно ясно.
+    func testDirectionSurvivesPunctuation() {
+        let result = mapper.convertEitherWay("ghbdtn, rfr ltkf?\nb xnj", first: ru, second: en)
+        XCTAssertTrue(result.text.contains("привет"), "получилось: \(result.text)")
+        XCTAssertTrue(result.text.contains("\n"))
+    }
+
+    /// Переводить нечего — так и сказано, чтобы вызывающий не менял текст зря.
+    func testReportsNothingToDo() {
+        XCTAssertEqual(mapper.convertEitherWay("🙂—…", first: en, second: ru).mapped, 0)
+    }
+}

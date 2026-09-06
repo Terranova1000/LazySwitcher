@@ -120,6 +120,26 @@ final class KeyMapper {
         return (result, mapped)
     }
 
+    /// Converts a selection, working out which way round it goes.
+    ///
+    /// Selecting text to fix it means the text is in the *wrong* alphabet, and
+    /// by then the keyboard has usually been switched back to the right one. So
+    /// "convert out of the currently active layout" is the wrong assumption
+    /// exactly when it matters: asked to explain the Cyrillic in «руддщ», the
+    /// English table recognises nothing and the whole selection is refused.
+    ///
+    /// Both directions are tried and the one that explains more of the text
+    /// wins. Ties go to `first`, which callers pass as the active layout —
+    /// it only comes up for text made of characters both layouts share.
+    func convertEitherWay(_ text: String, first: Table, second: Table)
+    -> (text: String, mapped: Int, usedFirst: Bool) {
+        let forward = convert(text, from: first, to: second)
+        let backward = convert(text, from: second, to: first)
+        return forward.mapped >= backward.mapped
+            ? (forward.text, forward.mapped, true)
+            : (backward.text, backward.mapped, false)
+    }
+
     /// Reads existing text back into the keystrokes that produced it.
     ///
     /// Returns nil if any character has no key in this layout — a partial answer
