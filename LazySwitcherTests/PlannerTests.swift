@@ -251,3 +251,78 @@ final class ReportedCasesTests: XCTestCase {
         }
     }
 }
+
+/// Короткие слова и односимвольные предлоги, о которых сообщил пользователь.
+///
+/// «нет, как, так, тут, не», «а откуда» — всё это короче порога и само по себе
+/// не срабатывает по построению. Работать оно обязано за счёт соседа: слово
+/// подлиннее рядом тянет их за собой. Здесь проверяется, что тянет.
+extension CorrectionPlannerTests {
+
+    /// «не это» → набрано «yt 'nj». Ровно тот пример из отчёта: «это»
+    /// исправлялось, а «не» оставалось латиницей.
+    func testShortWordIsCarriedByTheShortWordAfterIt() {
+        let plans = run("yt 'nj")
+        XCTAssertEqual(converted(plans), ["yt", "'nj"],
+                       "«не» обязано уйти вместе с «это», получили \(plans.map { $0.1 })")
+    }
+
+    /// «а откуда» → «f jnrelf». Односимвольный предлог перед длинным словом.
+    func testOneLetterPrepositionIsCarried() {
+        let plans = run("f jnrelf")
+        XCTAssertEqual(converted(plans), ["f", "jnrelf"],
+                       "«а» обязано уйти вместе с «откуда», получили \(plans.map { $0.1 })")
+    }
+
+    /// Перечисленные пользователем слова — каждое рядом с обычным словом.
+    func testCommonShortWordsAreCarried() {
+        for (short, meaning) in [("tot", "еще"), ("ytn", "нет"), ("rfr", "как"),
+                                 ("nfr", "так"), ("nen", "тут"), ("yt", "не")] {
+            let plans = run("\(short) gjyznyj")
+            XCTAssertTrue(converted(plans).contains(short),
+                          "«\(meaning)» осталось латиницей: \(plans.map { $0.1 })")
+        }
+    }
+
+    /// Обратный порядок: короткое слово после длинного тоже должно уходить.
+    func testShortWordAfterALongOneIsConverted() {
+        let plans = run("gjyznyj yt")
+        XCTAssertEqual(converted(plans), ["gjyznyj", "yt"])
+    }
+
+    /// И то, ради чего вся осторожность: настоящие английские слова рядом с
+    /// исправляемым остаются на месте.
+    func testRealEnglishWordsAreStillLeftAlone() {
+        let plans = run("a ghbdtn")
+        XCTAssertFalse(converted(plans).contains("a"), "«a» — английское слово, его не трогаем")
+    }
+}
+
+/// Обратная сторона послабления для трёхбуквенных слов.
+///
+/// Словарь перестал быть защитой для слов до трёх букв — он слишком много таких
+/// строк считает словами. Защищает теперь второе условие: у слова, которое
+/// собираются подхватить, **перевод обязан быть настоящим словом**. Здесь
+/// проверяется, что этого достаточно.
+extension CorrectionPlannerTests {
+
+    /// Частые английские слова из трёх букв рядом с исправляемым обязаны
+    /// остаться на месте: их перевод — не слово ни в каком смысле.
+    func testCommonEnglishThreeLetterWordsAreNotSweptUp() {
+        for word in ["the", "and", "for", "not", "you", "was", "are", "but",
+                     "can", "her", "his", "one", "our", "out", "who", "any"] {
+            let plans = run("\(word) ghbdtn")
+            XCTAssertFalse(converted(plans).contains(word),
+                           "«\(word)» — обычное английское слово, его трогать нельзя")
+        }
+    }
+
+    /// И то же самое, когда они идут после исправляемого слова.
+    func testCommonEnglishWordsSurviveAfterAConversion() {
+        for word in ["the", "and", "for", "you", "not"] {
+            let plans = run("ghbdtn \(word)")
+            XCTAssertFalse(converted(plans).contains(word),
+                           "«\(word)» не должно уходить следом за соседом")
+        }
+    }
+}

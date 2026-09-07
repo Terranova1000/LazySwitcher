@@ -160,7 +160,9 @@ final class TextReplacer {
         }
 
         guard let synthetic else { return Outcome(strategy: .synthetic, succeeded: false) }
-        awaitRendered((original as NSString).length)
+        if awaitRendered((original as NSString).length) == .tooShort {
+            return Outcome(strategy: .synthetic, succeeded: false, runDidNotFit: true)
+        }
         // Count characters, not UTF-16 units: one backspace removes one glyph,
         // and counting units would over-delete anything outside the BMP.
         log("synth \(original.count)→\(replacement.count)")
@@ -196,21 +198,30 @@ final class TextReplacer {
     /// cannot, so this often confirms the length even where the verified route
     /// was unavailable. Where nothing can be read, a slightly longer wait is all
     /// that is left — better than measuring against text that is not there yet.
-    private func awaitRendered(_ length: Int) {
-        guard length > 0, let element = focusedElement() else { usleep(blindSettleDelay); return }
+    private enum Fit { case confirmed, unknown, tooShort }
+
+    @discardableResult
+    private func awaitRendered(_ length: Int) -> Fit {
+        guard length > 0, let element = focusedElement() else {
+            usleep(blindSettleDelay); return .unknown
+        }
         for _ in 0..<4 {
             var raw: CFTypeRef?
             guard AXUIElementCopyAttributeValue(element, kAXSelectedTextRangeAttribute as CFString,
                                                 &raw) == .success,
                   let value = raw, CFGetTypeID(value) == AXValueGetTypeID()
-            else { usleep(blindSettleDelay); return }
+            else { usleep(blindSettleDelay); return .unknown }
             var caret = CFRange()
             guard AXValueGetValue(value as! AXValue, .cfRange, &caret) else {
-                usleep(blindSettleDelay); return
+                usleep(blindSettleDelay); return .unknown
             }
-            if caret.location >= length { return }
+            if caret.location >= length { return .confirmed }
             usleep(15_000)
         }
+        // Read it four times over sixty milliseconds and it never grew: there is
+        // genuinely less text here than we meant to replace, and the caller can
+        // ask for less rather than deleting into somebody else's words.
+        return .tooShort
     }
 
     /// Extra wait before deleting text we could not measure. Short enough to be
@@ -296,7 +307,16 @@ final class TextReplacer {
                                             &selectedValue) == .success,
               let selected = selectedValue as? String
         else { return giveUp(.notSupported, "нет поддержки") }
-        if selected != original {
+        // Case alone is not a disagreement.
+        //
+        // macOS capitalises the first word of a sentence after we have written
+        // it, so the chain remembers «привет» while the screen holds «Привет».
+        // The check exists to be sure we are about to delete the characters we
+        // think we are; a capital letter is the same character in the same
+        // place and the same count. Treating it as a mismatch cost a word every
+        // time — and, worse, put the application on the slow route for a minute,
+        // which is what quietly switched off carrying short neighbours along.
+        if selected.lowercased() != original.lowercased() {
             // Already done, by us, a moment ago.
             //
             // The retry above runs the whole routine a second time, and an
@@ -311,7 +331,7 @@ final class TextReplacer {
             // From the outside: the word gets fixed, the keyboard stays in the
             // wrong layout, and the correction after it goes wrong. Which is
             // what "it works every other time" looked like.
-            guard selected == replacement else {
+            guard selected.lowercased() == replacement.lowercased() else {
                 return giveUp(.mismatch,
                               "выделилось не то: \(selected.count) симв. вместо \(original.count)")
             }

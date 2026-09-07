@@ -128,7 +128,7 @@ struct WordChain {
     /// For those, the curated grammar list is the honest test. `no`, `it`, `if`
     /// are English words in the sense that matters and stay put; `yt` and `nj`
     /// are not, and may be carried.
-    static let dictionaryIsUnreliableUpTo = 2
+    static let dictionaryIsUnreliableUpTo = 3
 
     static func blocksSweep(_ entry: Entry) -> Bool {
         entry.typed.count <= dictionaryIsUnreliableUpTo

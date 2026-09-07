@@ -921,14 +921,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                                typed.count, "\(plan)", evidence.perCharacter))
             return
         case .convert(let carryingRequested, let reason):
-            // Reaching back over earlier words is only safe on the route that
-            // checks what it is deleting. Without that check a run spanning
-            // several words multiplies the damage from one wrong idea about the
-            // text — and the wrong idea is not hypothetical: macOS autocorrection
-            // rewrites words on the same keystroke we act on.
-            let verified = replacer.hasVerifiedRoute(in: apps.bundleID)
-            let carrying = verified ? carryingRequested : 0
-            if carryingRequested > 0, !verified { blindCarriesRefused.bump() }
+            // Neighbours are carried on both routes now.
+            //
+            // They used to be dropped wherever the self-checking route had
+            // failed recently, which sounded careful and was not: a single
+            // failure — usually nothing worse than macOS capitalising a word —
+            // switched off multi-word corrections in that application for a
+            // minute. «не это» left «не» behind, «f jnrelf» left the «f», and
+            // nothing said why.
+            //
+            // Safety comes from measuring instead: both routes now check how
+            // much text is actually in front of the caret and shrink the run to
+            // the current word when it does not fit.
+            let carrying = carryingRequested
             let rescued = Array(chain.entries.suffix(carrying))
             var from = typed + (trailing ?? "")
             var to = alternative + (trailing ?? "")
