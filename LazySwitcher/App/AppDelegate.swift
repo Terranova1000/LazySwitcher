@@ -104,7 +104,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// it after the user has already pressed space.
     private struct Committed {
         let keys: [KeyRecord]
-        let terminator: UInt16
+        let terminator: KeyRecord
         let at: Date
     }
     private var lastCommitted: Committed?
@@ -692,6 +692,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         os_unfair_lock_lock(&layoutsLock)
         layouts = pair
         os_unfair_lock_unlock(&layoutsLock)
+
+        // Which keys end a sentence depends on the layout, so it is worked out
+        // here and handed to the tap as a bitmap it can read without asking
+        // anybody anything.
+        tap.setSentencePunctuation(keyMapper.sentencePunctuation(in: currentTable))
     }
 
     private func publishContext(bundleID: String, appName: String) {
@@ -722,7 +727,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// M1–M3 end to end: a word ended, check it is allowed to be touched at all,
     /// then render it in the active layout and in the other one. Deciding which
     /// reading is right is M5; applying the change is M4.
-    private func evaluate(_ word: [KeyRecord], terminator: UInt16, isRetry: Bool = false) {
+    private func evaluate(_ word: [KeyRecord], terminator: KeyRecord, isRetry: Bool = false) {
         if !isRetry { wordsCommitted.bump() }
         // Captured here, before any hop. Everything downstream compares against it.
         let generation = tap.inputGeneration.value
@@ -837,18 +842,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // are no longer the ones we just watched being typed, and deleting
             // that many would eat somebody else's text. Tab moved focus, which
             // is the same problem. Escape may have closed the field entirely.
-            guard terminator == Self.spaceKeyCode else {
+            guard let tail = terminatorText(terminator) else {
                 chain.clear()
                 logDecision("\(reading.typed.count) симв.: закрыто не пробелом — не трогаем")
                 return
             }
+            // Only a space lets the next word reach back over this one: with
+            // punctuation between them they are not a run, they are two
+            // sentences' worth of text and rebuilding both is not ours to do.
+            if tail != " " { chain.clear() }
             considerAutomatic(word: word,
                               typed: reading.typed,
                               alternative: reading.alternative,
                               sourceLanguage: reading.sourceLanguage,
                               targetLanguage: reading.targetLanguage,
                               target: reading.target,
-                              trailing: " ",
+                              trailing: tail,
                               generation: generation)
         }
     }
@@ -1103,7 +1112,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     ///
     /// Bounded on every side: at most two further attempts, roughly two thirds
     /// of a second in total, and abandoned the moment anything at all is typed.
-    private func scheduleFieldRetry(_ word: [KeyRecord], terminator: UInt16,
+    private func scheduleFieldRetry(_ word: [KeyRecord], terminator: KeyRecord,
                                     generation: UInt64, attempt: Int) {
         guard attempt <= 2 else { fieldWaitsAbandoned.bump(); return }
         DispatchQueue.main.asyncAfter(deadline: .now() + (attempt == 1 ? 0.2 : 0.45)) {
@@ -1224,7 +1233,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if !target.inProgress.isEmpty {
                 apply(keys: target.inProgress, trailing: nil)
             } else if let committed = target.justCommitted,
-                      let terminator = Self.terminatorText(committed.terminator) {
+                      let terminator = terminatorText(committed.terminator) {
                 // Reachable only while nothing at all has happened since the
                 // space — the buffer guarantees that, not a stopwatch.
                 apply(keys: committed.keys, trailing: terminator)
@@ -1235,11 +1244,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// Only a space can be retyped as text. Tab and Return would have to be
-    /// re-sent as keys, and in most apps Return has already done something
-    /// irreversible — sent the message, submitted the form.
-    private static func terminatorText(_ keyCode: UInt16) -> String? {
-        keyCode == spaceKeyCode ? " " : nil
+    /// What the key that finished the word put on screen, if we can retype it.
+    ///
+    /// A space, or punctuation — a full stop, a comma, a question mark. Those
+    /// are characters like any other and can be written back verbatim.
+    ///
+    /// Tab and Return cannot: they would have to be re-sent as keys, and in most
+    /// applications Return has already done something irreversible — sent the
+    /// message, submitted the form — so the characters before the caret are no
+    /// longer the ones we watched being typed.
+    ///
+    /// The punctuation is rendered through the layout that produced it and put
+    /// back **unchanged**. Somebody who typed a question mark meant a question
+    /// mark; the same physical key gives `&` in the other alphabet, and
+    /// converting it would be a different kind of wrong.
+    /// The marks that finish a thought. Kept in step with
+    /// `KeyMapper.sentencePunctuation`, which decides where they are.
+    static let sentenceMarks: Set<Character> = [".", ",", "!", "?", ";", ":"]
+
+    private func terminatorText(_ record: KeyRecord) -> String? {
+        if record.keyCode == Self.spaceKeyCode { return " " }
+        guard let pair = currentLayouts,
+              let rendered = keyMapper.render([record], with: pair.source),
+              rendered.count == 1, let character = rendered.first,
+              Self.sentenceMarks.contains(character)
+        else { return nil }
+        return rendered
     }
 
     /// Converts a whole selection, however long, in one go.

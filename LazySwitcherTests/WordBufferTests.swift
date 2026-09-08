@@ -34,7 +34,7 @@ final class WordBufferTests: XCTestCase {
         type([VK.g, VK.h])
         let result = buffer.append(KeyRecord(keyCode: VK.space), hasCommandControlOrOption: false)
         XCTAssertEqual(result, .boundary(word: [KeyRecord(keyCode: VK.g), KeyRecord(keyCode: VK.h)],
-                                         terminator: VK.space))
+                                         terminator: KeyRecord(keyCode: VK.space)))
         XCTAssertTrue(buffer.isEmpty)
     }
 
@@ -46,7 +46,8 @@ final class WordBufferTests: XCTestCase {
                                                                     hasCommandControlOrOption: false) else {
                 return XCTFail("Клавиша \(boundary) должна закрывать слово")
             }
-            XCTAssertEqual(terminator, boundary, "Терминатор нужен, чтобы хоткей знал, что стирать")
+            XCTAssertEqual(terminator.keyCode, boundary,
+                           "Терминатор нужен, чтобы хоткей знал, что стирать")
         }
     }
 
@@ -163,7 +164,7 @@ final class JustCommittedTests: XCTestCase {
     func testWordIsReachableImmediatelyAfterTheSpace() {
         press(VK.g); press(VK.h); press(VK.space)
         XCTAssertEqual(buffer.justCommitted?.keys.map(\.keyCode), [VK.g, VK.h])
-        XCTAssertEqual(buffer.justCommitted?.terminator, VK.space)
+        XCTAssertEqual(buffer.justCommitted?.terminator.keyCode, VK.space)
     }
 
     func testTypingAnythingElseMakesItUnreachable() {
@@ -215,7 +216,7 @@ final class JustCommittedTests: XCTestCase {
     /// has already sent the message or submitted the form.
     func testReturnIsRecordedAsTerminatorButIsTheCallersProblem() {
         press(VK.g); press(VK.ret)
-        XCTAssertEqual(buffer.justCommitted?.terminator, VK.ret)
+        XCTAssertEqual(buffer.justCommitted?.terminator.keyCode, VK.ret)
     }
 }
 
@@ -310,6 +311,63 @@ extension WordBufferTests {
             return XCTFail("слово перед пробелом обязано завершиться")
         }
         XCTAssertEqual(word.map(\.keyCode), [VK.g, VK.h, VK.b])
-        XCTAssertEqual(terminator, VK.space)
+        XCTAssertEqual(terminator.keyCode, VK.space)
+    }
+}
+
+/// Знаки препинания завершают слово так же, как пробел.
+///
+/// До этого точка, запятая и вопросительный знак становились частью слова, и
+/// «ьфкиду?» никогда не превращалось в законченное слово — значит и не
+/// исправлялось. Сообщено из настоящей работы, со всеми вариантами сразу.
+///
+/// Решение о том, что нажатие дало знак препинания, принимает вызывающий: по
+/// коду клавиши это неразрешимо, потому что `,` на латинице и **б** на кириллице
+/// — одна и та же клавиша.
+final class PunctuationBoundaryTests: XCTestCase {
+
+    private var buffer = WordBuffer()
+
+    private func commit(_ terminator: UInt16, endsSentence: Bool,
+                        shift: Bool = false) -> KeyRecord? {
+        buffer = WordBuffer()
+        for code in [UInt16(0x05), UInt16(0x04), UInt16(0x0B)] {
+            _ = buffer.append(KeyRecord(keyCode: code), hasCommandControlOrOption: false)
+        }
+        let end = KeyRecord(keyCode: terminator, shift: shift, option: false,
+                            capsLock: false, timestamp: 0)
+        guard case .boundary(let word, let recorded) =
+                buffer.append(end, hasCommandControlOrOption: false, endsSentence: endsSentence),
+              word.count == 3 else { return nil }
+        return recorded
+    }
+
+    /// Клавиша, давшая знак препинания, завершает слово.
+    func testPunctuationEndsAWord() {
+        for code in [UInt16(0x2F), UInt16(0x2B), UInt16(0x2C), UInt16(0x12), UInt16(0x29)] {
+            XCTAssertNotNil(commit(code, endsSentence: true),
+                            "клавиша \(code) со знаком препинания обязана завершать слово")
+        }
+    }
+
+    /// Та же клавиша, давшая букву, слово не завершает. Это и есть разница
+    /// между `.` на латинице и **ю** на кириллице.
+    func testTheSameKeyDoesNotEndAWordWhenItTypedALetter() {
+        for code in [UInt16(0x2F), UInt16(0x2B), UInt16(0x29)] {
+            XCTAssertNil(commit(code, endsSentence: false),
+                         "клавиша \(code) на кириллице — буква, слово рвать нельзя")
+        }
+    }
+
+    func testSpaceStillEndsAWordWithoutBeingCalledPunctuation() {
+        XCTAssertNotNil(commit(0x31, endsSentence: false))
+    }
+
+    /// Завершитель сохраняется записью целиком, вместе с Shift: иначе «?» и «/»
+    /// не различить, а это разные символы.
+    func testTerminatorKeepsItsModifiers() {
+        let recorded = commit(0x2C, endsSentence: true, shift: true)
+        XCTAssertEqual(recorded?.shift, true, "Shift у завершителя обязан сохраниться")
+        XCTAssertEqual(recorded?.keyCode, 0x2C)
     }
 }

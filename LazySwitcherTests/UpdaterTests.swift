@@ -18,7 +18,15 @@ final class UpdaterSignatureTests: XCTestCase {
     /// We satisfy our own requirement. Trivially true and worth pinning: a
     /// verification that rejects everything is as broken as one that accepts
     /// everything, and looks safer.
-    func testOurOwnBundlePasses() {
+    func testOurOwnBundlePasses() throws {
+        // В отладочной сборке проверка подписи намеренно не выполняется: её
+        // bundle ID другой, и релиз не может удовлетворить её требование
+        // никогда. Тест проверяет ровно это и пропускает остальное.
+        #if DEBUG
+        let debugAnswer = Updater.signatureProblem(of: Bundle.main.bundleURL)
+        XCTAssertNotNil(debugAnswer, "отладочная сборка обязана отказаться обновляться")
+        throw XCTSkip("отладочная сборка не проверяет подпись — см. Н58")
+        #endif
         let problem = Updater.signatureProblem(of: Bundle.main.bundleURL)
         XCTAssertNil(problem, "Собственный бандл обязан проходить проверку: \(problem ?? "")")
     }

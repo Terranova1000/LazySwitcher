@@ -44,6 +44,43 @@ final class KeyTapService {
     /// Times a created tap port could not be turned into a run-loop source.
     let sourceCreationFailures = AtomicCounter()
 
+    /// Which keystrokes put sentence punctuation on screen, as a bitmap.
+    ///
+    /// Indexed by `keyCode * 2 + (shift ? 1 : 0)`, so 128 key codes and both
+    /// shift states fit in 256 bits — four aligned 64-bit words, which are read
+    /// atomically on this hardware without a lock (see `AtomicCounter`). The tap
+    /// callback must not take a lock the main thread can hold, and it must not
+    /// call into TIS or the layout tables at all, so the answer is computed on
+    /// the main thread whenever the layout changes and left here for the
+    /// callback to look up in one instruction.
+    private let punctuationBitmap = (AtomicCounter(), AtomicCounter(),
+                                     AtomicCounter(), AtomicCounter())
+
+    /// Replaces the bitmap. Main thread only; the callback only reads it.
+    func setSentencePunctuation(_ keys: Set<UInt32>) {
+        var words: [UInt64] = [0, 0, 0, 0]
+        for index in keys where index < 256 {
+            words[Int(index) / 64] |= (1 << UInt64(index % 64))
+        }
+        punctuationBitmap.0.value = words[0]
+        punctuationBitmap.1.value = words[1]
+        punctuationBitmap.2.value = words[2]
+        punctuationBitmap.3.value = words[3]
+    }
+
+    private func endsSentence(_ record: KeyRecord) -> Bool {
+        guard record.keyCode < 128 else { return false }
+        let index = Int(record.keyCode) * 2 + (record.shift ? 1 : 0)
+        let word: UInt64
+        switch index / 64 {
+        case 0: word = punctuationBitmap.0.value
+        case 1: word = punctuationBitmap.1.value
+        case 2: word = punctuationBitmap.2.value
+        default: word = punctuationBitmap.3.value
+        }
+        return word & (1 << UInt64(index % 64)) != 0
+    }
+
     /// Last key seen, for the M0 diagnostics window. Memory only: never logged,
     /// never written to disk, wiped when Secure Input turns on (CLAUDE.md rule 1).
     let lastKeyCode = AtomicCounter(UInt64.max)
@@ -67,7 +104,7 @@ final class KeyTapService {
     private let hotkeyDetector = HotkeyDetector()
 
     /// A word just ended. Delivered on `decideQueue`, never on the tap thread.
-    var onWordCommitted: (([KeyRecord], UInt16) -> Void)?
+    var onWordCommitted: (([KeyRecord], KeyRecord) -> Void)?
     /// A hotkey fired. Delivered on the main queue.
     var onHotkey: ((HotkeyDetector.Event) -> Void)?
 
@@ -370,7 +407,8 @@ final class KeyTapService {
                      || flags.contains(.maskAlternate)
             let record = KeyRecord(event: event, timestamp: now)
 
-            let outcome = wordBuffer.append(record, hasCommandControlOrOption: chord)
+            let outcome = wordBuffer.append(record, hasCommandControlOrOption: chord,
+                                            endsSentence: endsSentence(record))
             if case .reset(let reason) = outcome, let handler = onBufferInvalidated {
                 DispatchQueue.main.async { handler(reason) }
             }
@@ -439,7 +477,7 @@ final class KeyTapService {
     /// between and act on a caret position that no longer exists.
     struct HotkeyTarget {
         let inProgress: [KeyRecord]
-        let justCommitted: (keys: [KeyRecord], terminator: UInt16)?
+        let justCommitted: (keys: [KeyRecord], terminator: KeyRecord)?
     }
 
     func requestHotkeyTarget(_ completion: @escaping (HotkeyTarget) -> Void) {

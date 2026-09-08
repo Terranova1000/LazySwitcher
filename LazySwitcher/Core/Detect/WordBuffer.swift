@@ -36,7 +36,7 @@ final class WordBuffer {
     /// promise is void. An earlier version kept it for thirty seconds by the
     /// clock instead, and would then delete that many characters wherever the
     /// caret happened to be by then, eating a neighbouring word.
-    private(set) var justCommitted: (keys: [KeyRecord], terminator: UInt16)?
+    private(set) var justCommitted: (keys: [KeyRecord], terminator: KeyRecord)?
 
     enum ResetReason {
         case initial, secureInput, focusChanged, appChanged, modifierChord
@@ -69,7 +69,7 @@ final class WordBuffer {
         /// Space, tab or return: the word just ended, and here it is together
         /// with the key that ended it — a later hotkey has to delete that key
         /// too, and retype it, to leave the text as the user meant it.
-        case boundary(word: [KeyRecord], terminator: UInt16)
+        case boundary(word: [KeyRecord], terminator: KeyRecord)
         /// Backspace took the last key back off.
         case retracted
         /// Something that invalidates our picture of the text.
@@ -78,7 +78,17 @@ final class WordBuffer {
         case ignored
     }
 
-    func append(_ record: KeyRecord, hasCommandControlOrOption: Bool) -> AppendResult {
+    /// - Parameter endsSentence: whether this keystroke put punctuation on
+    ///   screen — a full stop, a comma, a question mark.
+    ///
+    ///   Decided by the caller, not here, because it cannot be decided from a
+    ///   key code. The key that types `,` in the Latin layout types **б** in the
+    ///   Cyrillic one, and `.` types **ю**; treating those as separators would
+    ///   cut Russian words in half. What matters is the character that appeared,
+    ///   and only the active layout knows it — so the answer is worked out once,
+    ///   when the layout changes, and arrives here as a plain boolean.
+    func append(_ record: KeyRecord, hasCommandControlOrOption: Bool,
+                endsSentence: Bool = false) -> AppendResult {
         // Anything at all happening invalidates the just-committed word: the
         // caret is no longer immediately after it.
         let carriedOver = justCommitted
@@ -110,7 +120,7 @@ final class WordBuffer {
             return .reset(.caretMoved)
         }
 
-        if Self.boundaryKeyCodes.contains(record.keyCode) {
+        if Self.boundaryKeyCodes.contains(record.keyCode) || endsSentence {
             let word = currentWord
             wipe(reason: .wordCommitted)
             guard !word.isEmpty else {
@@ -132,8 +142,8 @@ final class WordBuffer {
                 // correction, the cheap kind of mistake.
                 return .reset(.caretMoved)
             }
-            justCommitted = (keys: word, terminator: record.keyCode)
-            return .boundary(word: word, terminator: record.keyCode)
+            justCommitted = (keys: word, terminator: record)
+            return .boundary(word: word, terminator: record)
         }
 
         // Function keys, media keys, the Fn row: they produce nothing on screen,
@@ -186,6 +196,7 @@ final class WordBuffer {
     /// Space, tab, return and the keypad enter. Escape too: it ends whatever was
     /// being typed everywhere it means anything.
     static let boundaryKeyCodes: Set<UInt16> = [0x31, 0x30, 0x24, 0x4C, 0x35]
+
 
     /// Keys that put nothing on screen: the function row, Help, and the
     /// modifier-like keys that still arrive as key codes.

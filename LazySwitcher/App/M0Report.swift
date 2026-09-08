@@ -126,6 +126,15 @@ enum M0Report {
             row("слов не дождались", "\(delegate.fieldWaitsAbandoned.value)")
             row("пробегов укорочено", "\(delegate.shrunkRuns.value)")
             row("замен «уже сделано»", "\(delegate.replacer.alreadyDone)")
+            row("знаков конца в раскладке", delegate.currentLayouts.map { pair -> String in
+                let table = pair.source
+                let found = delegate.keyMapper.sentencePunctuation(in: table)
+                    .compactMap { code -> String? in
+                        table.character(keyCode: UInt16(code / 2), shift: code % 2 == 1)
+                    }
+                return found.isEmpty ? "НЕТ — знаки не завершают слово"
+                                     : found.sorted().joined(separator: " ")
+            } ?? "—")
             row("раскладка в снимке", delegate.currentLayouts.map {
                 "\($0.sourceLanguage) → \($0.targetLanguage)" } ?? "—")
             row("раскладка на самом деле", InputSourceService.currentLayout()

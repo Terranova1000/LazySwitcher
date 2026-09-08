@@ -87,6 +87,33 @@ final class KeyMapper {
 
     func invalidate() { cache.removeAll() }
 
+    /// Keystrokes that put sentence punctuation on screen in this layout.
+    ///
+    /// Returned as `keyCode * 2 + shift` so the caller can pack them into a
+    /// bitmap. Only the marks that genuinely end a thought are listed: a full
+    /// stop, a comma, a question or exclamation mark, a semicolon, a colon.
+    ///
+    /// Not the hyphen — «почему-то» is one word and has been reported as such —
+    /// and not the apostrophe, for the same reason in English.
+    ///
+    /// Computed per layout rather than per key code, because the key codes are
+    /// not the same thing: the key that types `,` on a Latin layout types **б**
+    /// on a Cyrillic one, and `.` types **ю**. Deciding by key code would cut
+    /// Russian words in half, which is what an existing test caught.
+    func sentencePunctuation(in table: Table) -> Set<UInt32> {
+        let marks: Set<Character> = [".", ",", "!", "?", ";", ":"]
+        var found: Set<UInt32> = []
+        for keyCode in 0..<UInt16(Table.keyCodeCount) {
+            for shift in [false, true] {
+                guard let text = table.character(keyCode: keyCode, shift: shift),
+                      text.count == 1, let character = text.first,
+                      marks.contains(character) else { continue }
+                found.insert(UInt32(keyCode) * 2 + (shift ? 1 : 0))
+            }
+        }
+        return found
+    }
+
     /// Re-types a piece of existing text as if the other layout had been active,
     /// leaving alone anything that layout cannot express.
     ///

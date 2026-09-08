@@ -1,14 +1,17 @@
-• Fixed a crash at launch on macOS 26. The application could die at the
-  moment it connects to the keyboard — silently, with no error window. Hence
-  "neither the hotkey nor the automatic correction works".
+• A word is now corrected when punctuation follows it: «ьфкиду?», «ьфкиду!»,
+  «ьфкиду.», «ьфкиду,» — previously only a space worked.
 
-• A correction no longer tries to shorten itself blindly: when there is less
-  text before the cursor than needed, nothing happens.
+  The mark itself is left exactly as typed: whoever typed a question mark
+  meant one, and the same key gives "&" in the other layout.
 
-• Development builds no longer offer to update themselves. Attempting it
-  used to end with "the signature does not match" — literally true and
-  entirely unhelpful.
+  The subtlety that made this slower than it looks: the "." and "," keys type
+  "ю" and "б" on a Cyrillic layout. Treating the key as a separator would cut
+  Russian words in half. So the application looks at the character that
+  appeared, and works it out afresh whenever the layout changes.
 
-If the application is silent after a macOS upgrade, check System Settings →
-Privacy & Security → Accessibility. An upgrade sometimes clears the
-permission, and the application has no way of being told.
+  The hyphen is deliberately excluded: «почему-то» is one word.
+
+• Fixed the crash at launch on macOS 26 (from 1.12.3).
+
+• Development builds no longer offer to update themselves — that used to
+  produce "the signature does not match" about nothing.
