@@ -991,7 +991,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             var outcome = replacer.replace(original: from, with: to, in: bundleID)
             var applied = (from: from, to: to)
             var marked = count
-            if !outcome.succeeded, outcome.runDidNotFit, let solo = soloFallback {
+            // Only retry with the shorter run when it demonstrably fits. Without
+            // this the fallback was still a guess — and it deleted: «rfr ltkf»
+            // came back as «rtkf», five characters gone, because the shorter run
+            // did not fit either and nothing checked.
+            let fits: Bool = {
+                guard let available = outcome.availableBeforeCaret else { return false }
+                guard let solo = soloFallback else { return false }
+                return (solo.from as NSString).length <= available
+            }()
+            if !outcome.succeeded, outcome.runDidNotFit, fits, let solo = soloFallback {
                 // The run did not fit. Ask for just the word that was actually
                 // typed — the neighbours we carried are evidently not where we
                 // thought they were.

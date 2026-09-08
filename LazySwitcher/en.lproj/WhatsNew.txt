@@ -1,19 +1,15 @@
-• Short words are finally corrected along with their neighbours: «не», «еще»,
-  «нет», «как», «так», «тут», «а», «это». «не это» used to come out as
-  «yt это», and «а откуда» was not corrected at all.
+• Fixed a crash at launch. On macOS 26 the application could die at the
+  moment it connects to the keyboard — silently, with no error window. Hence
+  "neither the hotkey nor the automatic correction works": there was nothing
+  left running.
 
-  Such words cannot be acted on alone — "a", "no", "он" are too often real
-  words. They are meant to travel with a neighbour, and that was what broke.
+  The cause: a system function sometimes returns nothing, and we passed that
+  straight on without checking. Both such places are now checked.
 
-• Fixed: a correction would fail on the first press and work on the second.
-  You could see the word being selected and immediately deselected.
+• A correction no longer tries to shorten itself blindly. When there is less
+  text before the cursor than needed, the application now does nothing —
+  previously it could delete more than it should.
 
-  The cause was small and expensive: before replacing anything the app checks
-  that it is about to change exactly what it means to. macOS capitalises the
-  first word of a sentence after we write it — so «Привет» no longer matched
-  «привет». One capital letter aborted the correction and, on top of that,
-  switched off carrying neighbouring words for a minute.
-
-  On your hunch: that check is what stops a password or somebody else's text
-  being mangled, so it has to stay. But it no longer objects to letter case,
-  and it no longer blocks anything.
+If the application is silent after a macOS upgrade, check System Settings →
+Privacy & Security → Accessibility. An OS upgrade sometimes clears the
+permission, and the application has no way of being told.

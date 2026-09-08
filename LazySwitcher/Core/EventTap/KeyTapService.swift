@@ -41,6 +41,8 @@ final class KeyTapService {
 
     /// How many times the tap had to be built again from nothing.
     let tapRebuildCount = AtomicCounter()
+    /// Times a created tap port could not be turned into a run-loop source.
+    let sourceCreationFailures = AtomicCounter()
 
     /// Last key seen, for the M0 diagnostics window. Memory only: never logged,
     /// never written to disk, wiped when Secure Input turns on (CLAUDE.md rule 1).
@@ -178,11 +180,31 @@ final class KeyTapService {
             userInfo: Unmanaged.passUnretained(self).toOpaque()
         ) else { return false }
 
+        // A port is not a source, and the conversion can fail.
+        //
+        // `CFMachPortCreateRunLoopSource` returns NULL for a port that is already
+        // invalid — which a freshly created tap can be, because creating it and
+        // being allowed to keep it are two different things. Swift types the
+        // result as optional and `CFRunLoopAddSource` as implicitly unwrapped, so
+        // nothing here objected: the nil went straight into C and the process
+        // died on the spot, on the tap thread, taking the whole application with
+        // it.
+        //
+        // Reported as "the app does not work at all", which was exactly right —
+        // it was crashing at launch. The crash report says:
+        //
+        //     EXC_BAD_ACCESS (SIGSEGV) in CFRunLoopAddSource
+        //     ← KeyTapService.installTap()  ← com.lazyswitcher.eventtap
+        guard let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, port, 0) else {
+            CFMachPortInvalidate(port)
+            sourceCreationFailures.bump()
+            return false
+        }
         tap = port
-        runLoopSource = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, port, 0)
+        runLoopSource = source
         // .commonModes, not .defaultMode: otherwise the tap goes deaf while a menu
         // is open or a window is being resized.
-        CFRunLoopAddSource(CFRunLoopGetCurrent(), runLoopSource, .commonModes)
+        CFRunLoopAddSource(CFRunLoopGetCurrent(), source, .commonModes)
         CGEvent.tapEnable(tap: port, enable: true)
 
         installWatchdog()
@@ -190,9 +212,12 @@ final class KeyTapService {
     }
 
     private func installWatchdog() {
-        let timer = CFRunLoopTimerCreateWithHandler(
+        // Same shape of hazard as above: a nil timer handed to CFRunLoopAddTimer
+        // is a crash, and nothing in the types says so.
+        let created = CFRunLoopTimerCreateWithHandler(
             kCFAllocatorDefault, CFAbsoluteTimeGetCurrent() + 5, 5, 0, 0
         ) { [weak self] _ in self?.checkTapAlive() }
+        guard let timer = created else { return }
         CFRunLoopAddTimer(CFRunLoopGetCurrent(), timer, .commonModes)
         watchdog = timer
     }

@@ -33,6 +33,12 @@ final class TextReplacer {
         /// so the useful response is to try again with less of it rather than to
         /// give up on the word entirely.
         var runDidNotFit = false
+        /// How much text there actually was, when we managed to measure it.
+        ///
+        /// The retry has to fit inside this. Retrying blindly with "just the
+        /// current word" was still a guess, and a guess that deletes is the one
+        /// kind this project does not get to make.
+        var availableBeforeCaret: Int?
     }
 
     /// What the accessibility route concluded.
@@ -95,6 +101,9 @@ final class TextReplacer {
     /// answer from thirty seconds ago should not decide the next hour.
     /// Diagnostic: replacements found already applied when we looked again.
     private(set) var alreadyDone = 0
+    /// Characters before the caret at the last "did not fit". Read once, by the
+    /// outcome that reports it.
+    private var lastAvailable: Int?
 
     private var accessibilityFailures: [String: Date] = [:]
     private static let failureMemory: TimeInterval = 60
@@ -153,7 +162,8 @@ final class TextReplacer {
                 // caller can ask for less — losing the whole correction because
                 // the carried neighbours did not fit is how a good decision
                 // turned into nothing happening at all.
-                return Outcome(strategy: .accessibility, succeeded: false, runDidNotFit: true)
+                return Outcome(strategy: .accessibility, succeeded: false,
+                               runDidNotFit: true, availableBeforeCaret: lastAvailable)
             case .notSupported:
                 accessibilityFailures[bundleID] = Date()
             }
@@ -161,7 +171,8 @@ final class TextReplacer {
 
         guard let synthetic else { return Outcome(strategy: .synthetic, succeeded: false) }
         if awaitRendered((original as NSString).length) == .tooShort {
-            return Outcome(strategy: .synthetic, succeeded: false, runDidNotFit: true)
+            return Outcome(strategy: .synthetic, succeeded: false,
+                           runDidNotFit: true, availableBeforeCaret: lastAvailable)
         }
         // Count characters, not UTF-16 units: one backspace removes one glyph,
         // and counting units would over-delete anything outside the BMP.
@@ -283,6 +294,7 @@ final class TextReplacer {
                   caret.location >= length
             else {
                 lastAXReason = "каретка на \(caret.location), нужно \(length)"
+                lastAvailable = caret.location
                 return .tooLongForField
             }
         }
