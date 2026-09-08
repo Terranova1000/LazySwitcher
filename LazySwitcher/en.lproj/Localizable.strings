@@ -194,3 +194,5 @@ Right after a correction, undoes it.";
 
 "story.sloth.title" = "A sloth is not lazy, it is economical";
 "story.sloth.body" = "Sloths are slow because of their diet, not their character. They eat leaves, leaves carry very little energy, and their metabolic rate is among the lowest of any mammal. There is simply nothing to move quickly on.\n\nThat same slowness protects them: a motionless sloth is hard to spot. Algae grow in their fur and lend it a greenish cast — camouflage that grows on you, literally.\n\nSo the slowness is not a shortcoming but a strategy. We rather like that approach.";
+
+"update.error.debugBuild" = "This is a development build — it does not update itself. Download the release from GitHub and drag it to Applications.";

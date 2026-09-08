@@ -1,15 +1,14 @@
-• Fixed a crash at launch. On macOS 26 the application could die at the
+• Fixed a crash at launch on macOS 26. The application could die at the
   moment it connects to the keyboard — silently, with no error window. Hence
-  "neither the hotkey nor the automatic correction works": there was nothing
-  left running.
+  "neither the hotkey nor the automatic correction works".
 
-  The cause: a system function sometimes returns nothing, and we passed that
-  straight on without checking. Both such places are now checked.
+• A correction no longer tries to shorten itself blindly: when there is less
+  text before the cursor than needed, nothing happens.
 
-• A correction no longer tries to shorten itself blindly. When there is less
-  text before the cursor than needed, the application now does nothing —
-  previously it could delete more than it should.
+• Development builds no longer offer to update themselves. Attempting it
+  used to end with "the signature does not match" — literally true and
+  entirely unhelpful.
 
 If the application is silent after a macOS upgrade, check System Settings →
-Privacy & Security → Accessibility. An OS upgrade sometimes clears the
+Privacy & Security → Accessibility. An upgrade sometimes clears the
 permission, and the application has no way of being told.

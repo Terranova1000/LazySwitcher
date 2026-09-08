@@ -181,6 +181,17 @@ enum Updater {
     /// binary — never from the download, which would let the download vouch for
     /// itself.
     static func signatureProblem(of app: URL) -> String? {
+        #if DEBUG
+        // A debug build carries a different bundle identifier on purpose
+        // (CLAUDE.md §17), so a release it downloads can never satisfy its
+        // designated requirement: the check fails with -67050 and reports "the
+        // signature does not match", which is true and completely unhelpful.
+        //
+        // This cost a real person real time. Development builds had been left
+        // on their machine beside the release one, and pressing "update" in the
+        // wrong icon produced a signature error about nothing.
+        return L("update.error.debugBuild")
+        #else
         var selfCode: SecCode?
         guard SecCodeCopySelf([], &selfCode) == errSecSuccess, let selfCode else {
             return L("update.error.ownSignature")
@@ -213,6 +224,7 @@ enum Updater {
             return detail
         }
         return nil
+        #endif
     }
 
     /// Swaps the bundle after we are gone.
