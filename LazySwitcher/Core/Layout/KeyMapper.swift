@@ -87,31 +87,59 @@ final class KeyMapper {
 
     func invalidate() { cache.removeAll() }
 
-    /// Keystrokes that put sentence punctuation on screen in this layout.
-    ///
-    /// Returned as `keyCode * 2 + shift` so the caller can pack them into a
-    /// bitmap. Only the marks that genuinely end a thought are listed: a full
-    /// stop, a comma, a question or exclamation mark, a semicolon, a colon.
+    /// The marks that finish a thought: a full stop, a comma, a question or
+    /// exclamation mark, a semicolon, a colon.
     ///
     /// Not the hyphen — «почему-то» is one word and has been reported as such —
     /// and not the apostrophe, for the same reason in English.
+    static let sentenceMarks: Set<Character> = [".", ",", "!", "?", ";", ":"]
+
+    /// Keystrokes that end a word the moment they are typed.
     ///
-    /// Computed per layout rather than per key code, because the key codes are
-    /// not the same thing: the key that types `,` on a Latin layout types **б**
-    /// on a Cyrillic one, and `.` types **ю**. Deciding by key code would cut
-    /// Russian words in half, which is what an existing test caught.
-    func sentencePunctuation(in table: Table) -> Set<UInt32> {
-        let marks: Set<Character> = [".", ",", "!", "?", ";", ":"]
+    /// Returned as `keyCode * 2 + shift` so the caller can pack them into a
+    /// bitmap.
+    ///
+    /// A key qualifies only if it types a sentence mark in the active layout
+    /// **and is not a letter in the other one**. The second half is the part
+    /// 1.13 got wrong. It asked only the active layout, and on the Latin layout
+    /// `,` `.` `;` are punctuation — but they are also where б, ю and ж live,
+    /// and the person this application exists for is typing Russian on the
+    /// Latin layout by mistake. `сообщение` typed that way is `cjj,otybt`: the
+    /// comma cut it in two, and `otybt` was converted alone into «cjj,щение».
+    ///
+    /// So on the Latin layout only `?` and `!` end a word at once. A full stop
+    /// or a comma at the end of a mistyped word is still honoured — decided when
+    /// the word ends, where both readings can be compared (`WordEnding`). On the
+    /// Cyrillic layout every mark qualifies: none of those keys is a Latin
+    /// letter, so `ьфкиду.` ends at the full stop as before.
+    func sentencePunctuation(in table: Table, other: Table) -> Set<UInt32> {
         var found: Set<UInt32> = []
         for keyCode in 0..<UInt16(Table.keyCodeCount) {
             for shift in [false, true] {
                 guard let text = table.character(keyCode: keyCode, shift: shift),
                       text.count == 1, let character = text.first,
-                      marks.contains(character) else { continue }
+                      Self.sentenceMarks.contains(character) else { continue }
+                if let otherText = other.character(keyCode: keyCode, shift: shift),
+                   otherText.count == 1, otherText.first?.isLetter == true { continue }
                 found.insert(UInt32(keyCode) * 2 + (shift ? 1 : 0))
             }
         }
         return found
+    }
+
+    /// How many keys at the end of a word type sentence punctuation in `source`
+    /// and a letter in `other` — the ones whose meaning depends on which
+    /// language was being typed. Zero for most words.
+    func ambiguousTrailingMarks(_ keys: [KeyRecord], source: Table, other: Table) -> Int {
+        var count = 0
+        for key in keys.reversed() {
+            guard let mark = render([key], with: source), mark.count == 1,
+                  let character = mark.first, Self.sentenceMarks.contains(character),
+                  let letter = render([key], with: other), letter.count == 1,
+                  letter.first?.isLetter == true else { break }
+            count += 1
+        }
+        return count
     }
 
     /// Re-types a piece of existing text as if the other layout had been active,

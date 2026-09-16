@@ -444,24 +444,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// same tap as everything else.
     ///
     /// So the tap thread publishes a tick every five seconds, and this watches
-    /// for it to stop advancing. Fifteen seconds is three missed ticks: long
-    /// enough that a busy moment cannot trigger it, short enough that a person
-    /// pauses, tries again, and it works.
+    /// for it to stop advancing — in awake time, and asking the thread before
+    /// replacing it. `TapLiveness` explains why both matter: the version that
+    /// measured silence on the wall clock restarted healthy taps after sleep,
+    /// and a restart is how the second tap got in.
     private func ensureTapIsAlive() {
-        guard tap.isRunning else { return }
+        guard tap.isRunning else { retryStartAfterFailure(); return }
 
-        let tick = tap.watchdogTick.value
-        if tick != lastTapTick {
-            lastTapTick = tick
-            lastTapTickAt = Date()
+        switch tapLiveness.observe(tick: tap.watchdogTick.value,
+                                   now: ProcessInfo.processInfo.systemUptime) {
+        case .none:
             return
+        case .probe:
+            tapProbes.bump()
+            tap.checkAlive()
+            return
+        case .restart:
+            break
         }
-        guard Date().timeIntervalSince(lastTapTickAt) > 15,
-              Date().timeIntervalSince(lastTapRestart) > 30
-        else { return }
-
-        lastTapRestart = Date()
-        lastTapTickAt = Date()
+        tapRestarts.bump()
         if tap.restart() {
             tap.setHotkeyStyle(Settings.shared.hotkeyStyle)
             // Everything typed while the tap was gone is unknown to us.
@@ -646,9 +647,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let shrunkRuns = AtomicCounter()
     private var lastCommitFieldRetry = Date.distantPast
     private var lastClickFieldRetry = Date.distantPast
-    private var lastTapTick: UInt64 = 0
-    private var lastTapTickAt = Date()
-    private var lastTapRestart = Date.distantPast
+    /// A tap that would not open. Try again, rather than never.
+    ///
+    /// `start()` can fail for a moment — the window server busy after a wake,
+    /// access revoked and restored, fast user switching — and until now one
+    /// such moment was the end of it: the heartbeat above only looks at a tap
+    /// that is running, so the application stayed running, visible and deaf
+    /// until somebody launched it again. That is the failure CLAUDE.md §8 puts
+    /// first: stopped working, silently, and the user cannot tell why.
+    private func retryStartAfterFailure() {
+        let now = ProcessInfo.processInfo.systemUptime
+        guard now - lastStartRetry > 30 else { return }
+        lastStartRetry = now
+        guard tap.start() else {
+            menuBar.update(permissions: Permissions.current().looksStuck ? .stuck : .missing)
+            return
+        }
+        tapStartRetriesRewarded.bump()
+        tap.setHotkeyStyle(Settings.shared.hotkeyStyle)
+        // Whatever was typed while nothing was listening is unknown to us.
+        tap.invalidateBuffer(reason: .caretMoved)
+        menuBar.update(permissions: .granted)
+        note("перехват открылся со второй попытки")
+    }
+
+    private var lastStartRetry: TimeInterval = -.infinity
+    /// Times a tap that had refused to open opened later.
+    let tapStartRetriesRewarded = AtomicCounter()
+
+    private var tapLiveness = TapLiveness()
+    /// Times the tap thread was asked to check in because it had gone quiet.
+    let tapProbes = AtomicCounter()
+    /// Times it did not answer and was replaced.
+    let tapRestarts = AtomicCounter()
     private var hasRelaunchedForPermissions = false
     /// Shared with onboarding: both paths can restart the process, and the rule
     /// that stops them looping is only useful if they count the same restarts.
@@ -696,7 +727,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Which keys end a sentence depends on the layout, so it is worked out
         // here and handed to the tap as a bitmap it can read without asking
         // anybody anything.
-        tap.setSentencePunctuation(keyMapper.sentencePunctuation(in: currentTable))
+        tap.setSentencePunctuation(keyMapper.sentencePunctuation(in: currentTable, other: otherTable))
     }
 
     private func publishContext(bundleID: String, appName: String) {
@@ -781,14 +812,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 if context.current.fieldRole == .text { lateFieldAnswers.bump() }
             }
 
+            // Punctuation that is also a letter in the other layout is settled
+            // first, so everything below judges the word itself: `ghbdtn.` is
+            // «привет» and a full stop, `cdj.` is «свою».
+            let settled = ending(of: word, reading)
+
             // Judged with the context we have just confirmed, not with one read
             // on another queue a moment ago. The veto and the action have to
             // agree about the world; when they were computed at different times
             // they could disagree, and the disagreement was invisible.
-            let verdict = VetoGate.evaluate(.init(word: reading.typed,
+            let verdict = VetoGate.evaluate(.init(word: settled.typed,
                                                   context: context.current))
 
-            lastPair = (typed: reading.typed, alternative: reading.alternative)
+            lastPair = (typed: settled.typed, alternative: settled.alternative)
             lastCommitted = Committed(keys: word, terminator: terminator, at: Date())
             // Any new typing means the previous replacement is no longer the
             // thing sitting in front of the caret.
@@ -844,20 +880,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // is the same problem. Escape may have closed the field entirely.
             guard let tail = terminatorText(terminator) else {
                 chain.clear()
-                logDecision("\(reading.typed.count) симв.: закрыто не пробелом — не трогаем")
+                logDecision("\(settled.typed.count) симв.: закрыто не пробелом — не трогаем")
                 return
             }
+            // Punctuation found inside the word goes back exactly as typed,
+            // in front of whatever ended it.
+            let trailing = settled.marks + tail
             // Only a space lets the next word reach back over this one: with
             // punctuation between them they are not a run, they are two
             // sentences' worth of text and rebuilding both is not ours to do.
-            if tail != " " { chain.clear() }
+            if trailing != " " { chain.clear() }
             considerAutomatic(word: word,
-                              typed: reading.typed,
-                              alternative: reading.alternative,
+                              typed: settled.typed,
+                              alternative: settled.alternative,
                               sourceLanguage: reading.sourceLanguage,
                               targetLanguage: reading.targetLanguage,
                               target: reading.target,
-                              trailing: tail,
+                              trailing: trailing,
                               generation: generation)
         }
     }
@@ -1144,6 +1183,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let target: TISInputSource
         let sourceLanguage: String
         let targetLanguage: String
+        /// The snapshot it was read with, so that settling the word's ending
+        /// later uses the same tables rather than whatever is current by then.
+        let pair: InputSourceService.LayoutPair
     }
 
     /// Safe from any queue: it reads the cached layout pair and does no TIS calls.
@@ -1153,7 +1195,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
               let alternative = keyMapper.render(word, with: pair.target)
         else { return nil }
         return Reading(typed: typed, alternative: alternative, target: pair.targetInputSource,
-                       sourceLanguage: pair.sourceLanguage, targetLanguage: pair.targetLanguage)
+                       sourceLanguage: pair.sourceLanguage, targetLanguage: pair.targetLanguage,
+                       pair: pair)
+    }
+
+    /// The word without punctuation that only looks like part of it.
+    ///
+    /// On the Latin layout a full stop, a comma or a semicolon is also a
+    /// Cyrillic letter, so the key buffer keeps them inside the word and this
+    /// decides, with the dictionaries, which they were (`WordEnding`).
+    private func ending(of keys: [KeyRecord], _ reading: Reading) -> WordEnding.Reading {
+        let pair = reading.pair
+        let scorer = modelStore.model(for: pair.sourceLanguage).flatMap { source in
+            modelStore.model(for: pair.targetLanguage).map { target in
+                Scorer(models: .init(source: source, target: target))
+            }
+        }
+        return WordEnding.resolve(keys, mapper: keyMapper, source: pair.source,
+                                  target: pair.target, scorer: scorer)
+            ?? WordEnding.Reading(typed: reading.typed, alternative: reading.alternative, marks: "")
     }
 
     // MARK: - Hotkey
@@ -1258,16 +1318,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// back **unchanged**. Somebody who typed a question mark meant a question
     /// mark; the same physical key gives `&` in the other alphabet, and
     /// converting it would be a different kind of wrong.
-    /// The marks that finish a thought. Kept in step with
-    /// `KeyMapper.sentencePunctuation`, which decides where they are.
-    static let sentenceMarks: Set<Character> = [".", ",", "!", "?", ";", ":"]
-
     private func terminatorText(_ record: KeyRecord) -> String? {
         if record.keyCode == Self.spaceKeyCode { return " " }
         guard let pair = currentLayouts,
               let rendered = keyMapper.render([record], with: pair.source),
               rendered.count == 1, let character = rendered.first,
-              Self.sentenceMarks.contains(character)
+              KeyMapper.sentenceMarks.contains(character)
         else { return nil }
         return rendered
     }
@@ -1355,10 +1411,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                        explicit: Bool = true,
                        precomputed: (typed: String, alternative: String, target: TISInputSource)? = nil) {
         let resolved: (typed: String, alternative: String, target: TISInputSource)
+        // Punctuation that turned out to be punctuation, not a letter of the
+        // other alphabet: kept as typed, between the word and its terminator.
+        var marks = ""
         if let precomputed {
             resolved = precomputed
-        } else if let reading = read(keys) {
-            resolved = (reading.typed, reading.alternative, reading.target)
+        } else if let wordReading = read(keys) {
+            let settled = ending(of: keys, wordReading)
+            resolved = (settled.typed, settled.alternative, wordReading.target)
+            marks = settled.marks
         } else {
             note("не удалось прочитать слово"); return
         }
@@ -1384,8 +1445,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         let bundleID = context.currentCold.bundleID
-        let from = reading.typed + (trailing ?? "")
-        let to = reading.alternative + (trailing ?? "")
+        let from = reading.typed + marks + (trailing ?? "")
+        let to = reading.alternative + marks + (trailing ?? "")
 
         guard !isReplacing else { note("пропущено: предыдущая замена ещё идёт"); return }
         isReplacing = true

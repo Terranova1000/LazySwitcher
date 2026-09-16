@@ -98,14 +98,37 @@ enum Updater {
             guard let data,
                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let assets = json["assets"] as? [[String: Any]],
-                  let dmg = assets.first(where: { ($0["name"] as? String)?.hasSuffix(".dmg") == true }),
-                  let link = dmg["browser_download_url"] as? String,
-                  let url = URL(string: link) else {
+                  let url = chooseAsset(from: assets) else {
                 DispatchQueue.main.async { completion(.failure(.noAsset)) }
                 return
             }
             DispatchQueue.main.async { completion(.success(url)) }
         }.resume()
+    }
+
+    /// Suffix of the copy of the disk image published for this updater.
+    static let updateAssetSuffix = ".app-update"
+
+    /// Which file of the release to download.
+    ///
+    /// The same disk image is published twice: `.dmg` for people and
+    /// `.app-update` for installed copies updating themselves. The bytes are
+    /// identical and go through the same signature check; only GitHub's
+    /// download counter tells them apart — which is the point. The number of
+    /// downloads of the second file is the number of installed copies that
+    /// updated, learned without the application sending anything anywhere:
+    /// it asks for the file it was always going to ask for, under another name.
+    ///
+    /// Versions up to 1.13 look for `.dmg` only and keep working unchanged. A
+    /// release without the second file falls back to the first.
+    static func chooseAsset(from assets: [[String: Any]]) -> URL? {
+        func link(where matches: (String) -> Bool) -> URL? {
+            guard let asset = assets.first(where: { ($0["name"] as? String).map(matches) == true }),
+                  let link = asset["browser_download_url"] as? String else { return nil }
+            return URL(string: link)
+        }
+        return link(where: { $0.hasSuffix(updateAssetSuffix) })
+            ?? link(where: { $0.hasSuffix(".dmg") })
     }
 
     private static func download(_ url: URL, progress: @escaping (Progress) -> Void,

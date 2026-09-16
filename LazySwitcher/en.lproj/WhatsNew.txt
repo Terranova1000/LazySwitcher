@@ -1,17 +1,11 @@
-• A word is now corrected when punctuation follows it: «ьфкиду?», «ьфкиду!»,
-  «ьфкиду.», «ьфкиду,» — previously only a space worked.
+• Fixed a bug where, after a while — most often after the Mac had slept —
+  the app could start damaging correctly typed text: letters were doubled
+  and ordinary Russian words turned into Latin nonsense.
 
-  The mark itself is left exactly as typed: whoever typed a question mark
-  meant one, and the same key gives "&" in the other layout.
+• Added a safeguard for the future: if a word does not look like any language
+  after replacement, the app leaves it alone. Whatever happens, nonsense will
+  no longer take the place of a normal word.
 
-  The subtlety that made this slower than it looks: the "." and "," keys type
-  "ю" and "б" on a Cyrillic layout. Treating the key as a separator would cut
-  Russian words in half. So the application looks at the character that
-  appeared, and works it out afresh whenever the layout changes.
-
-  The hyphen is deliberately excluded: «почему-то» is one word.
-
-• Fixed the crash at launch on macOS 26 (from 1.12.3).
-
-• Development builds no longer offer to update themselves — that used to
-  produce "the signature does not match" about nothing.
+• Words containing «б», «ю» and «ж» typed on the English layout are corrected
+  whole again. Version 1.13 cut them at those letters. A full stop, a comma
+  and other marks after a word still work.

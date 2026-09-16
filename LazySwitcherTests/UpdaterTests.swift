@@ -230,3 +230,39 @@ final class UpdaterHandOffTests: XCTestCase {
                        "После неудачи прежняя версия обязана вернуться на место")
     }
 }
+
+/// Which file of a release the updater downloads.
+///
+/// The disk image is published twice so that GitHub's download counter can
+/// tell people downloading the app from installed copies updating themselves.
+/// The choice must never leave an update with nothing to download.
+final class UpdateAssetChoiceTests: XCTestCase {
+
+    private func asset(_ name: String) -> [String: Any] {
+        ["name": name, "browser_download_url": "https://example.invalid/\(name)"]
+    }
+
+    func testTheCopyForTheUpdaterIsPreferred() {
+        let url = Updater.chooseAsset(from: [asset("LazySwitcher-1.15.dmg"),
+                                             asset("LazySwitcher-1.15.app-update")])
+        XCTAssertEqual(url?.lastPathComponent, "LazySwitcher-1.15.app-update")
+    }
+
+    /// Upload order is not guaranteed, so neither is the order of the list.
+    func testPreferenceDoesNotDependOnOrder() {
+        let url = Updater.chooseAsset(from: [asset("LazySwitcher-1.15.app-update"),
+                                             asset("LazySwitcher-1.15.dmg")])
+        XCTAssertEqual(url?.lastPathComponent, "LazySwitcher-1.15.app-update")
+    }
+
+    /// Every release up to 1.13 has only the disk image.
+    func testAReleaseWithoutTheCopyStillUpdates() {
+        let url = Updater.chooseAsset(from: [asset("LazySwitcher-1.13.dmg")])
+        XCTAssertEqual(url?.lastPathComponent, "LazySwitcher-1.13.dmg")
+    }
+
+    func testNothingSuitableMeansNoURL() {
+        XCTAssertNil(Updater.chooseAsset(from: [asset("NOTES.md"), asset("source.zip")]))
+        XCTAssertNil(Updater.chooseAsset(from: []))
+    }
+}

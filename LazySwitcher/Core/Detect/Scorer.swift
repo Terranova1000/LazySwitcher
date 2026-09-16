@@ -34,6 +34,13 @@ struct Scorer {
         /// False when a reading contains a character the model has no symbol for.
         /// Then `logLikelihoodRatio` carries no information and must not be used.
         var isScorable = true
+        /// How much the converted reading looks like its own language at all,
+        /// in nats per character.
+        ///
+        /// Not the same question as `perCharacter`, which only asks whether it
+        /// looks *more* like its language than the typed reading looks like
+        /// its own. Two readings of nonsense still have a better one.
+        var convertedPlausibility: Double = 0
     }
 
     enum Decision: Equatable {
@@ -60,6 +67,34 @@ struct Scorer {
     /// collides with a real word of the other language, and three in five
     /// two-character ones do.
     static let minimumSelfDecidingLength = 3
+
+    /// The least a converted reading must look like its language before the
+    /// model alone may put it on screen.
+    ///
+    /// Without a floor the model compares two readings and the better one
+    /// wins, however bad both are — and from eight characters the threshold
+    /// above is zero, so "better" meant better by anything at all. When a
+    /// second event tap delivered every keystroke twice, `сообщение` arrived as
+    /// `ссооооббщщееннииее`; its Latin reading `ccjjjj,,oottyybbtt` is nonsense
+    /// too, but less Russian-looking nonsense is English-looking enough, and
+    /// the word was replaced. Measured over the held-out lists with every key
+    /// doubled: 99.0% of Russian words and 50.6% of English ones were
+    /// "corrected" that way.
+    ///
+    /// Measured on the same lists, words the model converts correctly:
+    ///
+    ///     floor   correct conversions lost   doubled nonsense stopped
+    ///     −3.4        130 of 77452 (0.17%)        100.00%
+    ///     −3.5         63 of 77452 (0.08%)        100.00%
+    ///     −3.6         38 of 77452 (0.05%)         99.66%
+    ///     −3.8         10 of 77452 (0.01%)         68.56%
+    ///
+    /// The words below −3.5 are the rarest the lists hold — `цхинвали`,
+    /// `каптенармус`, `tzatziki`, `zworykin`. Held-out words are absent from the
+    /// dictionary by construction; in real typing an ordinary word is decided
+    /// by the dictionary before this line is reached, so the real loss is
+    /// smaller still, and a miss is one press of the hotkey.
+    static let plausibilityFloor = -3.5
 
     // MARK: - Scoring
 
@@ -98,6 +133,7 @@ struct Scorer {
         }
 
         var totalRatio = 0.0
+        var totalConverted = 0.0
         var everyPartKnownInSource = true
         var everyPartKnownInTarget = true
         for (left, right) in zip(typedParts, convertedParts) {
@@ -107,6 +143,8 @@ struct Scorer {
                 return evidence
             }
             totalRatio += part.logLikelihoodRatio
+            // Back to nats, so the parts add up the way their ratios do.
+            totalConverted += part.convertedPlausibility * Double(part.length + 1)
             everyPartKnownInSource = everyPartKnownInSource && part.typedIsKnownWord
             everyPartKnownInTarget = everyPartKnownInTarget && part.convertedIsKnownWord
         }
@@ -116,6 +154,9 @@ struct Scorer {
         evidence.convertedIsKnownWord = everyPartKnownInTarget
         evidence.logLikelihoodRatio = totalRatio
         evidence.perCharacter = totalRatio / Double(evidence.length + 1)
+        // The parts' `length + 1` add up to the whole word's, hyphens included,
+        // so this is the same per-character measure as for a plain word.
+        evidence.convertedPlausibility = totalConverted / Double(evidence.length + 1)
         evidence.decidedByDictionary = evidence.typedIsKnownWord != evidence.convertedIsKnownWord
         return evidence
     }
@@ -153,6 +194,7 @@ struct Scorer {
         evidence.isScorable = true
         evidence.logLikelihoodRatio = convertedScore - typedScore
         evidence.perCharacter = evidence.logLikelihoodRatio / Double(evidence.length + 1)
+        evidence.convertedPlausibility = convertedScore / Double(evidence.length + 1)
         evidence.decidedByDictionary = evidence.typedIsKnownWord != evidence.convertedIsKnownWord
         return evidence
     }
@@ -186,7 +228,13 @@ struct Scorer {
 
         guard evidence.length >= Self.minimumSelfDecidingLength else { return .undecided }
         let threshold = Self.threshold(forLength: evidence.length)
-        if evidence.perCharacter > threshold { return .convert }
+        if evidence.perCharacter > threshold {
+            // Better than what is on screen, but not something anybody writes.
+            // Undecided rather than keep: a neighbour still cannot carry it,
+            // because carrying requires the converted reading to be a real word.
+            guard evidence.convertedPlausibility >= Self.plausibilityFloor else { return .undecided }
+            return .convert
+        }
         if evidence.perCharacter < -threshold { return .keep }
         return .undecided
     }

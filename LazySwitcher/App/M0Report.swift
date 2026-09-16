@@ -113,6 +113,11 @@ enum M0Report {
             row("тик сторожа tap'а", "\(tap.watchdogTick.value)")
             row("оживлений tap'а", "\(tap.watchdogRevivalCount.value)")
             row("пересозданий tap'а", "\(tap.tapRebuildCount.value)")
+            row("перехватов у процесса (по системе)", "\(KeyTapService.tapsInstalledByThisProcess())")
+            row("событий от старого перехвата", "\(tap.staleDeliveries.value)")
+            row("проверок живости потока", "\(delegate.tapProbes.value)")
+            row("перезапусков потока", "\(delegate.tapRestarts.value)")
+            row("остановок без ответа", "\(tap.stopsTimedOut.value)")
             row("спуск внутрь", delegate.focus.descentTrace)
             row("сборок после пробуждения", "\(delegate.wakeRecoveries)")
             row("пересозданий наблюдателя", "\(delegate.focus.reobserveCount)")
@@ -128,7 +133,7 @@ enum M0Report {
             row("замен «уже сделано»", "\(delegate.replacer.alreadyDone)")
             row("знаков конца в раскладке", delegate.currentLayouts.map { pair -> String in
                 let table = pair.source
-                let found = delegate.keyMapper.sentencePunctuation(in: table)
+                let found = delegate.keyMapper.sentencePunctuation(in: table, other: pair.target)
                     .compactMap { code -> String? in
                         table.character(keyCode: UInt16(code / 2), shift: code % 2 == 1)
                     }
