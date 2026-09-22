@@ -93,6 +93,7 @@ enum M0Report {
             row("снимок раскладок", flag(delegate.hasLayoutPair))
             row("слов не прочитано", "\(delegate.unreadableWords.value)")
             row("история замен", delegate.replacer.history.joined(separator: " | "))
+            row("решения", delegate.decisionLog.joined(separator: " | "))
             row("спасено цепочкой", "\(delegate.chainRescues.value)")
             row("последнее решение", delegate.lastDecisionNote)
             row("модели загружены", delegate.modelStore.loadedLanguages.joined(separator: ", "))
@@ -131,6 +132,16 @@ enum M0Report {
             row("слов не дождались", "\(delegate.fieldWaitsAbandoned.value)")
             row("пробегов укорочено", "\(delegate.shrunkRuns.value)")
             row("замен «уже сделано»", "\(delegate.replacer.alreadyDone)")
+            row("брошено в последний момент", "\(delegate.replacer.lateAbandons)")
+            row("из них: набрано ещё", "\(delegate.lateByTyping.value)")
+            row("из них: нет тишины", "\(delegate.lateByNoQuiet.value)")
+            row("тишина в последней проверке, мс", String(format: "%.0f", delegate.lastQuietMilliseconds))
+            row("смен раскладки извне", "\(delegate.externalLayoutChanges.value)")
+            row("слов на шве раскладок", "\(delegate.straddledWords.value) "
+                                       + "(собрано \(delegate.straddledWordsRepaired.value))")
+            row("переключение раскладки, мс", String(format: "%.0f (худшее %.0f)",
+                                                     delegate.lastLayoutSwitchMilliseconds,
+                                                     delegate.worstLayoutSwitchMilliseconds))
             row("знаков конца в раскладке", delegate.currentLayouts.map { pair -> String in
                 let table = pair.source
                 let found = delegate.keyMapper.sentencePunctuation(in: table, other: pair.target)

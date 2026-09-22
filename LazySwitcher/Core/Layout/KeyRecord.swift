@@ -22,21 +22,36 @@ struct KeyRecord: Equatable {
     let capsLock: Bool
     /// Mach absolute time, for the pause-before-word feature and nothing else.
     let timestamp: UInt64
+    /// Which keyboard layout was in force when this key was pressed.
+    ///
+    /// A counter, not a name: the callback may not ask the system anything
+    /// (CLAUDE.md rule 7), so the main thread bumps it whenever the layout
+    /// changes and the callback copies whatever number is there.
+    ///
+    /// Needed because switching the layout is not instant. Measured on this
+    /// machine: between asking and the change arriving, 52 ms at best and
+    /// 243 ms at worst — and every keystroke inside that window still produces
+    /// the old alphabet. A word begun there is half in one layout and half in
+    /// the other: «как lела». Without this stamp the word reads as «дела» to
+    /// us, which is neither what is on screen nor what can be repaired.
+    let layout: UInt32
 
     init(keyCode: UInt16, shift: Bool = false, option: Bool = false,
-         capsLock: Bool = false, timestamp: UInt64 = 0) {
+         capsLock: Bool = false, timestamp: UInt64 = 0, layout: UInt32 = 0) {
         self.keyCode = keyCode
         self.shift = shift
         self.option = option
         self.capsLock = capsLock
         self.timestamp = timestamp
+        self.layout = layout
     }
 
-    init(event: CGEvent, timestamp: UInt64) {
+    init(event: CGEvent, timestamp: UInt64, layout: UInt32 = 0) {
         self.keyCode = UInt16(event.getIntegerValueField(.keyboardEventKeycode))
         self.shift = event.flags.contains(.maskShift)
         self.option = event.flags.contains(.maskAlternate)
         self.capsLock = event.flags.contains(.maskAlphaShift)
         self.timestamp = timestamp
+        self.layout = layout
     }
 }

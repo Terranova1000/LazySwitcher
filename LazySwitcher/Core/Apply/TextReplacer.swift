@@ -27,6 +27,8 @@ final class TextReplacer {
     struct Outcome {
         let strategy: Strategy
         let succeeded: Bool
+        /// The text moved while we were getting ready, so nothing was typed.
+        var abandonedLate = false
         /// There was less text in front of the caret than we meant to replace.
         ///
         /// Our idea of the text is too long, not the application's answer wrong,
@@ -101,6 +103,10 @@ final class TextReplacer {
     /// answer from thirty seconds ago should not decide the next hour.
     /// Diagnostic: replacements found already applied when we looked again.
     private(set) var alreadyDone = 0
+    /// Diagnostic: replacements dropped at the last moment because the person
+    /// had typed on. Each one is a word not corrected and, more to the point,
+    /// a word not damaged.
+    private(set) var lateAbandons = 0
     /// Characters before the caret at the last "did not fit". Read once, by the
     /// outcome that reports it.
     private var lastAvailable: Int?
@@ -121,15 +127,45 @@ final class TextReplacer {
         self.synthetic = synthetic
     }
 
+    #if DEBUG
+    /// Forces the blind route, so it can be exercised where the verified one
+    /// works. Every browser and every Electron application uses the blind one,
+    /// and until now nothing tested it: in TextEdit, where the self-test types,
+    /// accessibility always answers. Armed only through the M5 trigger file,
+    /// which `scripts/audit-release.sh` checks is absent from release builds.
+    var forceSyntheticForTesting = false
+    #endif
+    
+
     /// - Parameters:
     ///   - original: what is on screen now, exactly as typed.
     ///   - replacement: what should be there instead.
     ///   - bundleID: the frontmost app, for remembering what works where.
+    /// - Parameter stillValid: asked again at the last moment before anything is
+    ///   deleted. Between the decision and the first backspace lie a settle
+    ///   delay, up to two accessibility round trips and a wait for the caret —
+    ///   a tenth of a second in which somebody typing quickly has already put
+    ///   the next letter on screen. Deleting a fixed number of characters then
+    ///   eats that letter: «rfr ltkf» came back as «rкак ела», measured at
+    ///   30 ms between keystrokes. The caller's generation counter knows; it
+    ///   was simply never asked this late.
     @discardableResult
-    func replace(original: String, with replacement: String, in bundleID: String) -> Outcome {
+    func replace(original: String, with replacement: String, in bundleID: String,
+                 stillValid: () -> Bool = { true },
+                 silence: () -> Double = { KeyTapService.longSilence },
+                 interval: () -> Double = { KeyTapService.slowestAssumedRhythm }) -> Outcome {
         usleep(settleDelay)
 
-        if !isBlacklisted(bundleID) {
+        var mayUseAccessibility = !isBlacklisted(bundleID)
+        #if DEBUG
+        if forceSyntheticForTesting { mayUseAccessibility = false }
+        #endif
+        if mayUseAccessibility {
+            guard stillValid() else {
+                log("поздно: текст уехал")
+                lateAbandons += 1
+                return Outcome(strategy: .accessibility, succeeded: false, abandonedLate: true)
+            }
             var result = replaceViaAccessibility(original: original, with: replacement)
             if result == .mismatch {
                 // Give it one more chance before concluding anything. A slow
@@ -174,12 +210,96 @@ final class TextReplacer {
             return Outcome(strategy: .synthetic, succeeded: false,
                            runDidNotFit: true, availableBeforeCaret: lastAvailable)
         }
+        // The last moment at which nothing has been destroyed yet.
+        guard waitForAPause(inRunOf: original.count, stillValid: stillValid,
+                            silence: silence, interval: interval) else {
+            log("поздно: печатают")
+            lateAbandons += 1
+            return Outcome(strategy: .synthetic, succeeded: false, abandonedLate: true)
+        }
         // Count characters, not UTF-16 units: one backspace removes one glyph,
         // and counting units would over-delete anything outside the BMP.
         log("synth \(original.count)→\(replacement.count)")
         synthetic.replace(deleting: original.count, with: replacement)
         return Outcome(strategy: .synthetic, succeeded: true)
     }
+
+    /// Waits until the person has stopped typing for at least as long as our
+    /// own burst will take, and says whether it is safe to start.
+    ///
+    /// A replacement is not one action. It is a lead-in, then a backspace every
+    /// few milliseconds, then the new text — tens of milliseconds during which
+    /// nothing can be checked, because the events are already on their way. A
+    /// keystroke landing inside that run is deleted by our own backspaces, and
+    /// one of the characters we meant to delete survives instead: «rfr ltkf»
+    /// typed at thirty milliseconds a key came back as «rкак ела».
+    ///
+    /// So the question asked here is not "has anything changed" — that is the
+    /// generation check — but "has this person paused long enough that they are
+    /// unlikely to type into the middle of what we are about to do". Somebody
+    /// typing steadily faster than our own burst gets no automatic corrections
+    /// and no damage; the hotkey still works, and a miss costs half a second
+    /// (CLAUDE.md §1).
+    ///
+    /// Waiting costs the correction a few tens of milliseconds of delay, which
+    /// is below the threshold of noticing — the measured path from the space to
+    /// this point is about 31 ms, so a pause of 40–100 ms lands well inside the
+    /// moment a person spends before their next word.
+    private func waitForAPause(inRunOf characters: Int, stillValid: () -> Bool,
+                               silence: () -> Double, interval: () -> Double) -> Bool {
+        let burst = burstSeconds(characters) + 0.015
+        // Clamped, because these come from callers: an unknown rhythm must not
+        // turn into a wait nobody can satisfy.
+        let rhythm = interval()
+        var waited: Double = 0
+        while true {
+            let quiet = min(silence(), KeyTapService.longSilence)
+            if Self.mayStartBurst(quiet: quiet, rhythm: rhythm, burst: burst) {
+                return stillValid()
+            }
+            guard stillValid() else { return false }
+            guard waited < Self.longestWait else { return false }
+            usleep(8_000)
+            waited += 0.008
+        }
+    }
+
+    /// Is this a safe moment to start a run of synthetic events?
+    ///
+    /// Pure, so the rule can be read and tested without a keyboard:
+    ///
+    /// · there is room before the next keystroke is due — the person's own
+    ///   rhythm says it is further away than our burst is long; or
+    /// · they have clearly stopped: silent for half again their own rhythm,
+    ///   and for at least as long as the burst will take.
+    ///
+    /// Everything here is finite on purpose. An earlier version answered
+    /// "infinitely quiet" when nobody had typed yet, and `rhythm * 1.5`
+    /// overflowed to infinity — so the first comparison was never true, and the
+    /// undo, which asks this question with no typing behind it, stopped working
+    /// altogether.
+    static func mayStartBurst(quiet: Double, rhythm: Double, burst: Double) -> Bool {
+        guard burst.isFinite else { return true }
+        // Clamped here rather than trusted from the caller: "nobody has typed"
+        // used to arrive as infinity, and `rhythm * 1.5` overflowed.
+        let quiet = quiet.isNaN ? KeyTapService.longSilence : min(quiet, KeyTapService.longSilence)
+        let rhythm = rhythm.isNaN ? KeyTapService.slowestAssumedRhythm
+                                  : min(max(rhythm, 0), KeyTapService.slowestAssumedRhythm)
+        if quiet >= burst, rhythm > quiet + burst { return true }
+        return quiet >= max(burst, rhythm * 1.5)
+    }
+
+    /// How long our own run of events will take, from the delays it is made of.
+    private func burstSeconds(_ characters: Int) -> Double {
+        guard let synthetic else { return 0 }
+        let spacing = characters > 8 ? synthetic.backspaceDelay * 2 : synthetic.backspaceDelay
+        let deleting = Double(characters) * Double(spacing) / 1_000_000
+        let typing = Double((characters / 20) + 1) * Double(synthetic.typingDelay) / 1_000_000
+        return Double(synthetic.leadInDelay) / 1_000_000 + deleting + typing
+    }
+
+    /// We do not hold a correction back for longer than this.
+    private static let longestWait: Double = 0.250
 
     func forget(_ bundleID: String) { accessibilityFailures.removeValue(forKey: bundleID) }
 

@@ -48,11 +48,48 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// and — the actual reason — it touches TIS, which may only happen here.
     private var layouts: InputSourceService.LayoutPair?
     private var layoutsLock = os_unfair_lock_s()
+    /// Which snapshot is in force, and the one before it.
+    ///
+    /// Keystrokes carry the number of the layout they were typed in, so a word
+    /// that straddles a change can still be read exactly as it appears on
+    /// screen — see `KeyRecord.layout`.
+    private var layoutEpoch: UInt32 = 0
+    private var previousLayouts: InputSourceService.LayoutPair?
+    private var previousEpoch: UInt32 = 0
+    /// Whether the change into the current layout was one we asked for.
+    ///
+    /// It decides how much the stamps on keystrokes are worth. Our own switches
+    /// are timed to within a few milliseconds, because we poll for them; a
+    /// change somebody else made reaches us through a notification that has
+    /// been seen to arrive a quarter of a second late, by which time keys typed
+    /// in the new layout are already stamped with the old one. Trusting those
+    /// stamps would invent seams that are not there and cost corrections.
+    private var currentEpochIsOurs = false
+    private var awaitingOwnSwitch = false
 
     var currentLayouts: InputSourceService.LayoutPair? {
         os_unfair_lock_lock(&layoutsLock)
         defer { os_unfair_lock_unlock(&layoutsLock) }
         return layouts
+    }
+
+    /// The snapshot plus the numbering, read as one — asking twice could see a
+    /// layout change land in between.
+    private func layoutSnapshot() -> LayoutSnapshot? {
+        os_unfair_lock_lock(&layoutsLock)
+        defer { os_unfair_lock_unlock(&layoutsLock) }
+        guard let layouts else { return nil }
+        return LayoutSnapshot(pair: layouts, epoch: layoutEpoch, previous: previousLayouts,
+                              previousEpoch: previousEpoch, epochIsOurs: currentEpochIsOurs)
+    }
+
+    private struct LayoutSnapshot {
+        let pair: InputSourceService.LayoutPair
+        let epoch: UInt32
+        let previous: InputSourceService.LayoutPair?
+        let previousEpoch: UInt32
+        /// See `currentEpochIsOurs`.
+        let epochIsOurs: Bool
     }
     let chainRescues = AtomicCounter()
 
@@ -119,6 +156,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var onboarding: OnboardingWindowController?
     private var reportTimer: Timer?
     private var layoutSweepTimer: Timer?
+    private var layoutWatchTimer: Timer?
     private var permissionTimer: Timer?
 
     /// XCTest launches the app as a host for the test bundle. In that mode it
@@ -243,6 +281,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         inputSources.onLayoutChanged = { [weak self] in
             guard let self else { return }
+            noteLayoutArrived()
             keyMapper.invalidate()
             refreshLayouts()
         }
@@ -267,6 +306,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         RunLoop.main.add(sweep, forMode: .common)
         layoutSweepTimer = sweep
+
+        // And a faster one, which does nothing at all unless somebody is typing.
+        let layoutWatch = Timer(timeInterval: 0.05, repeats: true) { [weak self] _ in
+            self?.watchLayoutWhileTyping()
+        }
+        RunLoop.main.add(layoutWatch, forMode: .common)
+        layoutWatchTimer = layoutWatch
 
         tap.onWordCommitted = { [weak self] word, terminator in
             self?.evaluate(word, terminator: terminator)
@@ -721,8 +767,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                                                  targetInputSource: other,
                                                  sourceInputSource: current)
         os_unfair_lock_lock(&layoutsLock)
+        if let old = layouts, old.source.layoutID != pair.source.layoutID {
+            previousLayouts = old
+            previousEpoch = layoutEpoch
+            layoutEpoch &+= 1
+            currentEpochIsOurs = awaitingOwnSwitch
+            awaitingOwnSwitch = false
+        }
         layouts = pair
+        let epoch = layoutEpoch
         os_unfair_lock_unlock(&layoutsLock)
+        // Stamped onto every keystroke from here on.
+        tap.layoutEpoch.value = UInt64(epoch)
 
         // Which keys end a sentence depends on the layout, so it is worked out
         // here and handed to the tap as a bitmap it can read without asking
@@ -815,6 +871,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // Punctuation that is also a letter in the other layout is settled
             // first, so everything below judges the word itself: `ghbdtn.` is
             // «привет» and a full stop, `cdj.` is «свою».
+            // A word begun in one layout and finished in another is not a word
+            // we can judge: half of it means one thing on screen and another
+            // in our reading of it.
+            if reading.straddlesLayouts {
+                repairStraddlingWord(word, reading: reading,
+                                     terminator: terminator, generation: generation)
+                return
+            }
+
             let settled = ending(of: word, reading)
 
             // Judged with the context we have just confirmed, not with one read
@@ -898,6 +963,115 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                               target: reading.target,
                               trailing: trailing,
                               generation: generation)
+        }
+    }
+
+    /// Puts back together a word that a layout switch cut in half.
+    ///
+    /// After a correction we switch the system layout so the rest of the phrase
+    /// comes out right. That switch is not instant — measured here at 52 ms at
+    /// best and 243 ms at worst — and anything typed inside that window still
+    /// comes out in the old alphabet. Type on without pausing and the next word
+    /// arrives as «как lела»: one letter from before the switch, the rest from
+    /// after.
+    ///
+    /// Nothing noticed this before, because the word reads as «дела» to us —
+    /// every key rendered through the layout in force by the end. The screen
+    /// said otherwise, so the word looked correct and was left alone.
+    ///
+    /// The repair is deterministic rather than statistical: the keys are known,
+    /// the layout the person ended up in is known, and the only question is
+    /// whether the result is a real word. If it is not, nothing happens —
+    /// a mixed word nobody can vouch for is left exactly as it is.
+    private func repairStraddlingWord(_ word: [KeyRecord], reading: Reading,
+                                      terminator: KeyRecord, generation: UInt64) {
+        // Whatever the chain believed about this run, there is a seam in it now.
+        chain.clear()
+        undo.invalidate()
+        straddledWords.bump()
+
+        // Which layout did the person mean for the whole word? The dictionary
+        // decides between the two readings; see `SeamRepair`.
+        let candidates = [
+            SeamRepair.Candidate(text: keyMapper.render(word, with: reading.pair.source) ?? "",
+                                 language: reading.pair.sourceLanguage),
+            SeamRepair.Candidate(text: keyMapper.render(word, with: reading.pair.target) ?? "",
+                                 language: reading.pair.targetLanguage),
+        ]
+        guard let meant = SeamRepair.meant(onScreen: reading.typed, candidates: candidates,
+                                           isKnownWord: { [weak self] text, language in
+                                               guard let model = self?.modelStore.model(for: language)
+                                               else { return false }
+                                               return model.contains(LanguageModel.normalized(text))
+                                           }) else {
+            logDecision("\(reading.typed.count) симв.: шов раскладок, собрать не из чего")
+            return
+        }
+        // Switching the layout afterwards only makes sense when the word turned
+        // out to belong to the other one — a name or a brand typed after we had
+        // already switched.
+        let landing = meant.language == reading.pair.targetLanguage ? reading.pair.targetInputSource : nil
+        let intended = meant.text
+        guard context.current.allowsAutomaticReplacement else {
+            refusedByContext.bump()
+            logDecision("\(reading.typed.count) симв.: шов раскладок, контекст запретил")
+            return
+        }
+        guard case .allowed = VetoGate.evaluate(.init(word: intended, context: context.current)) else {
+            wordsVetoed.bump()
+            logDecision("\(reading.typed.count) симв.: шов раскладок «\(intended.count)» запрещено")
+            return
+        }
+        guard let tail = terminatorText(terminator) else {
+            logDecision("\(reading.typed.count) симв.: шов раскладок, закрыто не пробелом")
+            return
+        }
+        straddledWordsRepaired.bump()
+        logDecision("\(reading.typed.count) симв.: шов раскладок — собираем слово")
+        applyRepair(from: reading.typed + tail, to: intended + tail,
+                    switchingTo: landing, generation: generation)
+    }
+
+    /// Words typed across a layout switch, and how many of them were put right.
+    let straddledWords = AtomicCounter()
+    let straddledWordsRepaired = AtomicCounter()
+
+    /// Like `applyRun`, without the layout switch: the layout is already the
+    /// one the person is typing in — that is what cut the word in half.
+    private func applyRepair(from: String, to: String, switchingTo target: TISInputSource?,
+                             generation: UInt64) {
+        let bundleID = context.currentCold.bundleID
+        guard !isReplacing else { note("пропущено: предыдущая замена ещё идёт"); return }
+        isReplacing = true
+        replacementStartedAt = Date()
+        applyQueue.async { [weak self] in
+            guard let self else { return }
+            let outcome = replacer.replace(
+                original: from, with: to, in: bundleID,
+                stillValid: { [weak self] in self?.mayTouchTextNow(generation) == true },
+                silence: { [weak self] in self?.tap.secondsSinceLastKeystroke() ?? KeyTapService.longSilence },
+                interval: { [weak self] in self?.tap.recentTypingInterval() ?? KeyTapService.slowestAssumedRhythm })
+            DispatchQueue.main.async {
+                self.isReplacing = false
+                guard outcome.succeeded else {
+                    self.note(outcome.abandonedLate ? "поздно: текст изменился, не трогаем"
+                                                    : "шов раскладок: собрать не удалось")
+                    return
+                }
+                self.replacementsMade.bump()
+                self.note("шов раскладок: \(from.count) симв.")
+                self.tap.clearBufferAfterReplacement()
+                self.undo.arm(original: from, replacement: to, bundleID: bundleID,
+                              generation: self.tap.inputGeneration.value)
+                // Only when the word turned out to belong to the other layout —
+                // a name or a brand typed after we had switched. When it was
+                // the layout in force, that is already where the person is.
+                if let target, Settings.shared.switchLayoutAfterReplacement {
+                    self.noteLayoutRequested()
+                    self.inputSources.select(target)
+                }
+                self.playFeedback()
+            }
         }
     }
 
@@ -1017,6 +1191,125 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     ///   is both safe and what the person was expecting; abandoning everything,
     ///   which is what used to happen, looks exactly like the application not
     ///   working.
+    /// Whether it is still safe to rewrite the text we decided about.
+    ///
+    /// Two questions, and the second one is the one that was missing. The
+    /// generation says whether anything has been typed since the decision. The
+    /// silence says whether the person has *stopped* — because a replacement is
+    /// not instant: it is a run of synthetic events spread over tens of
+    /// milliseconds, and a keystroke that lands inside it is deleted by our own
+    /// backspaces. Nothing can be checked once that run has started.
+    ///
+    /// Measured with the self-test typing at a steady rate: at 120 ms between
+    /// keystrokes nothing was ever damaged; at 60 and 30 ms, half the two-word
+    /// phrases came back broken. Forty milliseconds of quiet is therefore the
+    /// price of touching the text at all — and somebody typing faster than that
+    /// without pause simply gets no automatic corrections, which is the cheap
+    /// kind of mistake (CLAUDE.md §1).
+    func mayTouchTextNow(_ generation: UInt64) -> Bool {
+        guard tap.inputGeneration.value == generation else {
+            lateByTyping.bump()
+            return false
+        }
+        lastQuietMilliseconds = tap.secondsSinceLastKeystroke() * 1000
+        return true
+    }
+
+    /// How long the system took to actually change the layout after we asked.
+    ///
+    /// Measured because it decides whether switching is safe at all while
+    /// somebody is typing: keystrokes made during this window are produced by
+    /// the *old* layout, so a word begun in that window comes out half in one
+    /// alphabet and half in the other — «как lела».
+    private var layoutRequestedAt: UInt64 = 0
+    private(set) var lastLayoutSwitchMilliseconds: Double = -1
+    private(set) var worstLayoutSwitchMilliseconds: Double = 0
+
+    func noteLayoutRequested() {
+        layoutRequestedAt = mach_absolute_time()
+        os_unfair_lock_lock(&layoutsLock)
+        awaitingOwnSwitch = true
+        os_unfair_lock_unlock(&layoutsLock)
+        watchForLayoutToTakeEffect()
+    }
+
+    /// Finds out when the layout change we asked for actually happened.
+    ///
+    /// The system's notification arrives on the main run loop and can be late:
+    /// measured here at 52 ms at best and 245 ms at worst. Every keystroke in
+    /// between gets stamped with a layout that is no longer in force, which is
+    /// worse than not stamping at all — it makes a word look as though it
+    /// straddles a change when it does not, and hides the ones that do.
+    ///
+    /// So for a moment after asking, we look for ourselves. TIS answers from a
+    /// local cache and the window is bounded, so this is a few dozen cheap
+    /// questions and then silence.
+    private func watchForLayoutToTakeEffect() {
+        layoutPollUntil = Date().addingTimeInterval(0.5)
+        guard layoutPollTimer == nil else { return }
+        let timer = Timer(timeInterval: 0.005, repeats: true) { [weak self] timer in
+            guard let self else { timer.invalidate(); return }
+            if let now = InputSourceService.currentLayout(), let pair = currentLayouts,
+               InputSourceService.identifier(of: now) != pair.source.layoutID {
+                refreshLayouts()
+                timer.invalidate()
+                layoutPollTimer = nil
+                return
+            }
+            if Date() > layoutPollUntil {
+                timer.invalidate()
+                layoutPollTimer = nil
+            }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        layoutPollTimer = timer
+    }
+
+    private var layoutPollTimer: Timer?
+    private var layoutPollUntil = Date.distantPast
+
+    /// Notices a layout change somebody else made, while typing is going on.
+    ///
+    /// Our own switches are watched above. This is for the other kind: the
+    /// person pressing Caps Lock or ⌘-Space themselves. The system's
+    /// notification for those arrives on the main run loop and is late often
+    /// enough to matter — and every keystroke until it arrives is stamped with
+    /// a layout that has already been replaced, which makes a whole word
+    /// unreadable to us.
+    ///
+    /// Only while somebody is typing: at rest this timer asks nothing, which
+    /// keeps the promise about doing nothing when nothing is happening.
+    private func watchLayoutWhileTyping() {
+        guard tap.secondsSinceLastKeystroke() < 3 else { return }
+        guard let now = InputSourceService.currentLayout(), let pair = currentLayouts,
+              InputSourceService.identifier(of: now) != pair.source.layoutID else { return }
+        externalLayoutChanges.bump()
+        keyMapper.invalidate()
+        refreshLayouts()
+    }
+
+    /// Layout changes we did not ask for, caught by looking rather than waiting.
+    let externalLayoutChanges = AtomicCounter()
+
+    func noteLayoutArrived() {
+        guard layoutRequestedAt != 0 else { return }
+        let elapsed = Double(mach_absolute_time() - layoutRequestedAt) * AppDelegate.machToSeconds * 1000
+        layoutRequestedAt = 0
+        lastLayoutSwitchMilliseconds = elapsed
+        worstLayoutSwitchMilliseconds = max(worstLayoutSwitchMilliseconds, elapsed)
+    }
+
+    static let machToSeconds: Double = {
+        var info = mach_timebase_info_data_t()
+        mach_timebase_info(&info)
+        return Double(info.numer) / Double(info.denom) / 1_000_000_000
+    }()
+
+    /// Diagnostics: which half of the question said no, and how quiet it was.
+    let lateByTyping = AtomicCounter()
+    let lateByNoQuiet = AtomicCounter()
+    private(set) var lastQuietMilliseconds: Double = -1
+
     private func applyRun(from: String, to: String, target: TISInputSource,
                           marking count: Int, endingAt boundary: Int, generation: UInt64,
                           soloFallback: (from: String, to: String)? = nil) {
@@ -1036,7 +1329,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 DispatchQueue.main.async { self.isReplacing = false; self.note("пропущено: текст изменился") }
                 return
             }
-            var outcome = replacer.replace(original: from, with: to, in: bundleID)
+            // Asked again at the last moment, inside the replacer: the checks
+            // above happen before a settle delay and up to two accessibility
+            // round trips, and a tenth of a second is enough for somebody
+            // typing quickly to have put the next letter on screen.
+            let stillValid = { [weak self] in self?.mayTouchTextNow(generation) == true }
+            let silence = { [weak self] in self?.tap.secondsSinceLastKeystroke() ?? KeyTapService.longSilence }
+            let rhythm = { [weak self] in self?.tap.recentTypingInterval() ?? KeyTapService.slowestAssumedRhythm }
+            var outcome = replacer.replace(original: from, with: to, in: bundleID,
+                                           stillValid: stillValid, silence: silence, interval: rhythm)
             var applied = (from: from, to: to)
             var marked = count
             // Only retry with the shorter run when it demonstrably fits. Without
@@ -1053,14 +1354,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 // typed — the neighbours we carried are evidently not where we
                 // thought they were.
                 self.shrunkRuns.bump()
-                outcome = replacer.replace(original: solo.from, with: solo.to, in: bundleID)
+                outcome = replacer.replace(original: solo.from, with: solo.to, in: bundleID,
+                                           stillValid: stillValid, silence: silence, interval: rhythm)
                 applied = solo
                 marked = 1
             }
             let finalOutcome = outcome, finalApplied = applied, finalMarked = marked
             DispatchQueue.main.async {
                 self.isReplacing = false
-                guard finalOutcome.succeeded else { self.note("замена не удалась"); return }
+                guard finalOutcome.succeeded else {
+                self.note(finalOutcome.abandonedLate ? "поздно: текст изменился, не трогаем"
+                                                     : "замена не удалась")
+                return
+            }
                 let outcome = finalOutcome
                 let from = finalApplied.from, to = finalApplied.to
                 let count = finalMarked
@@ -1072,7 +1378,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 // keystroke, and any further typing will move past it.
                 self.undo.arm(original: from, replacement: to, bundleID: bundleID,
                               generation: self.tap.inputGeneration.value)
-                if Settings.shared.switchLayoutAfterReplacement { self.inputSources.select(target) }
+                if Settings.shared.switchLayoutAfterReplacement {
+                    self.noteLayoutRequested()
+                    self.inputSources.select(target)
+                }
                 self.playFeedback()
             }
         }
@@ -1178,6 +1487,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// Renders a run of keystrokes in the active layout and in the other one.
     private struct Reading {
+        /// What is on screen — rendered through the layout each key was typed
+        /// in, which is only ever more than one when a switch landed mid-word.
         let typed: String
         let alternative: String
         let target: TISInputSource
@@ -1186,17 +1497,57 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         /// The snapshot it was read with, so that settling the word's ending
         /// later uses the same tables rather than whatever is current by then.
         let pair: InputSourceService.LayoutPair
+        /// The word was begun in one layout and finished in another.
+        let straddlesLayouts: Bool
     }
 
     /// Safe from any queue: it reads the cached layout pair and does no TIS calls.
     private func read(_ word: [KeyRecord]) -> Reading? {
-        guard let pair = currentLayouts,
-              let typed = keyMapper.render(word, with: pair.source),
-              let alternative = keyMapper.render(word, with: pair.target)
-        else { return nil }
-        return Reading(typed: typed, alternative: alternative, target: pair.targetInputSource,
+        guard let snapshot = layoutSnapshot() else { return nil }
+        let pair = snapshot.pair
+        guard let alternative = keyMapper.render(word, with: pair.target) else { return nil }
+
+        // The ordinary case: every key was typed in the layout in force now.
+        //
+        // Or the layout was changed by somebody else, in which case the stamps
+        // are not worth reading: we learn about those changes late, so an older
+        // stamp on the first key means "we had not heard yet", not "typed in
+        // the old alphabet".
+        if word.allSatisfy({ $0.layout == snapshot.epoch }) || !snapshot.epochIsOurs {
+            guard let typed = keyMapper.render(word, with: pair.source) else { return nil }
+            return Reading(typed: typed, alternative: alternative, target: pair.targetInputSource,
+                           sourceLanguage: pair.sourceLanguage, targetLanguage: pair.targetLanguage,
+                           pair: pair, straddlesLayouts: false)
+        }
+
+        // Otherwise a layout change landed inside the word, and the text on
+        // screen is part one alphabet, part the other. Read it the way it is:
+        // each key through the layout it was actually typed in.
+        guard let onScreen = renderAcrossLayouts(word, snapshot: snapshot) else { return nil }
+        return Reading(typed: onScreen, alternative: alternative, target: pair.targetInputSource,
                        sourceLanguage: pair.sourceLanguage, targetLanguage: pair.targetLanguage,
-                       pair: pair)
+                       pair: pair, straddlesLayouts: true)
+    }
+
+    /// Renders a word whose keys were typed in two different layouts.
+    ///
+    /// Only the layout in force and the one before it can be resolved; anything
+    /// older is a word we lost track of, and the honest answer there is nothing.
+    private func renderAcrossLayouts(_ word: [KeyRecord], snapshot: LayoutSnapshot) -> String? {
+        var text = ""
+        for key in word {
+            let table: KeyMapper.Table
+            if key.layout == snapshot.epoch {
+                table = snapshot.pair.source
+            } else if key.layout == snapshot.previousEpoch, let previous = snapshot.previous {
+                table = previous.source
+            } else {
+                return nil
+            }
+            guard let rendered = keyMapper.render([key], with: table) else { return nil }
+            text += rendered
+        }
+        return text
     }
 
     /// The word without punctuation that only looks like part of it.
@@ -1267,13 +1618,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // second, which is what "it only works a few times" was.
             if let selection = TextSelection.current(pid: focus.observedPID),
                !selection.text.isEmpty {
+                logDecision("жест: выделение \(selection.text.count) симв.")
                 convertSelection(selection)
                 return
             }
             if undo.isAvailable, let pending = undo.consume(currentGeneration: tap.inputGeneration.value) {
+                logDecision("жест: откат")
                 revert(pending)
                 return
             }
+            logDecision("жест: слово")
             convertOnHotkey()
         }
     }
@@ -1291,6 +1645,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         tap.requestHotkeyTarget { [weak self] target in
             guard let self else { return }
             if !target.inProgress.isEmpty {
+                logDecision("жест: слово в наборе, \(target.inProgress.count) клавиш")
                 apply(keys: target.inProgress, trailing: nil)
             } else if let committed = target.justCommitted,
                       let terminator = terminatorText(committed.terminator) {
@@ -1298,6 +1653,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 // space — the buffer guarantees that, not a stopwatch.
                 apply(keys: committed.keys, trailing: terminator)
             } else {
+                logDecision("жест: нечего исправлять")
                 note("нечего исправлять")
                 NSSound.beep()
             }
@@ -1399,7 +1755,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self.tap.clearBufferAfterReplacement()
                 self.undo.arm(original: selection.text, replacement: converted,
                               bundleID: bundleID, generation: self.tap.inputGeneration.value)
-                if Settings.shared.switchLayoutAfterReplacement { self.inputSources.select(landing) }
+                if Settings.shared.switchLayoutAfterReplacement {
+                    self.noteLayoutRequested()
+                    self.inputSources.select(landing)
+                }
                 self.playFeedback()
             }
         }
@@ -1439,6 +1798,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if case .vetoed(let reason) = verdict {
             wordsVetoed.bump()
             lastVetoReason = reason
+            logDecision("жест: запрещено (\(reason.rawValue))")
             note("запрещено: \(reason.rawValue)")
             NSSound.beep()
             return
@@ -1447,19 +1807,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let bundleID = context.currentCold.bundleID
         let from = reading.typed + marks + (trailing ?? "")
         let to = reading.alternative + marks + (trailing ?? "")
+        logDecision("жест: меняем \(from.count)→\(to.count)")
 
         guard !isReplacing else { note("пропущено: предыдущая замена ещё идёт"); return }
         isReplacing = true
         replacementStartedAt = Date()
+        let generation = tap.inputGeneration.value
 
         // Off the main thread: synthetic typing sleeps between events, and a
         // ten-letter word is over a hundred milliseconds of it.
         applyQueue.async { [weak self] in
             guard let self else { return }
-            let outcome = replacer.replace(original: from, with: to, in: bundleID)
+            let outcome = replacer.replace(
+                original: from, with: to, in: bundleID,
+                stillValid: { [weak self] in self?.mayTouchTextNow(generation) == true },
+                silence: { [weak self] in self?.tap.secondsSinceLastKeystroke() ?? KeyTapService.longSilence },
+                interval: { [weak self] in self?.tap.recentTypingInterval() ?? KeyTapService.slowestAssumedRhythm })
             DispatchQueue.main.async {
                 self.isReplacing = false
-                guard outcome.succeeded else { self.note("замена не удалась"); return }
+                guard outcome.succeeded else {
+                    self.note(outcome.abandonedLate ? "поздно: текст изменился, не трогаем"
+                                                    : "замена не удалась")
+                    return
+                }
                 self.replacementsMade.bump()
                 self.note("\(outcome.strategy.rawValue): \(reading.typed.count) симв.")
                 self.tap.clearBufferAfterReplacement()
@@ -1470,7 +1840,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                               generation: self.tap.inputGeneration.value)
                 // Switch the layout too, or the next word comes out wrong again
                 // and the correction was pointless.
-                if Settings.shared.switchLayoutAfterReplacement { self.inputSources.select(reading.target) }
+                if Settings.shared.switchLayoutAfterReplacement {
+                    self.noteLayoutRequested()
+                    self.inputSources.select(reading.target)
+                }
                 self.playFeedback()
             }
         }
@@ -1489,9 +1862,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         isReplacing = true
         applyQueue.async { [weak self] in
             guard let self else { return }
-            let outcome = replacer.replace(original: pending.replacement,
-                                           with: pending.original,
-                                           in: pending.bundleID)
+            let outcome = replacer.replace(
+                original: pending.replacement, with: pending.original, in: pending.bundleID,
+                stillValid: { [weak self] in
+                    self?.tap.inputGeneration.value == pending.generation
+                },
+                silence: { [weak self] in self?.tap.secondsSinceLastKeystroke() ?? KeyTapService.longSilence },
+                interval: { [weak self] in self?.tap.recentTypingInterval() ?? KeyTapService.slowestAssumedRhythm })
             DispatchQueue.main.async {
                 self.isReplacing = false
                 guard outcome.succeeded else { self.note("откат не удался"); return }

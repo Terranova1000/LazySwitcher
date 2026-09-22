@@ -1,11 +1,16 @@
-• Fixed a bug where, after a while — most often after the Mac had slept —
-  the app could start damaging correctly typed text: letters were doubled
-  and ordinary Russian words turned into Latin nonsense.
+• The main one: while typing quickly, the app could damage words — «как дела»
+  came out as «rкак ела» or «как lела». It was replacing text while you were
+  still typing, so its keystrokes and yours got mixed together.
 
-• Added a safeguard for the future: if a word does not look like any language
-  after replacement, the app leaves it alone. Whatever happens, nonsense will
-  no longer take the place of a normal word.
+  It now makes sure you have stopped first. If you type without pauses, the
+  correction waits for the next pause and fixes the whole phrase at once.
 
-• Words containing «б», «ю» and «ж» typed on the English layout are corrected
-  whole again. Version 1.13 cut them at those letters. A full stop, a comma
-  and other marks after a word still work.
+• A word begun before a layout switch and finished after it is no longer left
+  broken in half. The app now remembers which layout every key was pressed in
+  and puts such a word back together.
+
+• Names and brands typed right after a correction come back as English:
+  «привет google как дела» now happens by itself.
+
+• Undo is fixed: double Shift right after a replacement brings back what you
+  typed again.

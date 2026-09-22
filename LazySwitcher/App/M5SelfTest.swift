@@ -48,6 +48,8 @@ enum M5SelfTest {
     /// faster than almost anybody types, and useful precisely for that reason.
     private static var keyInterval = 60
     private static var pressHotkey = false
+    /// Хвост «+synth» — гнать замену слепым путём, как в Electron и браузерах.
+    private static var forceSynthetic = false
 
     static func watchForTrigger(delegate: AppDelegate) {
         let timer = Timer(timeInterval: 1.0, repeats: true) { _ in
@@ -66,6 +68,7 @@ enum M5SelfTest {
             expected = parts.count > 2 ? parts[2] : "привет"
             // Хвост «+hotkey» — нажать жест после набора, а не ждать автозамены.
             pressHotkey = raw.contains("+hotkey")
+            forceSynthetic = raw.contains("+synth")
             if let range = raw.range(of: #"@(\d+)"#, options: .regularExpression) {
                 keyInterval = Int(raw[range].dropFirst()) ?? 60
             } else {
@@ -134,6 +137,8 @@ enum M5SelfTest {
         // в угадывание: «прпривет как» выглядит дефектом замены, а на деле это
         // верный результат с двумя чужими буквами впереди.
         delegate.replacer.clearHistory()
+        delegate.replacer.forceSyntheticForTesting = forceSynthetic
+        lines.append("путь замены: \(forceSynthetic ? "слепой (как в Electron)" : "обычный")")
         clearFocusedField()
         Thread.sleep(forTimeInterval: 0.3)
         lines.append("поле очищено: «\(readFocusedText() ?? "?")»")

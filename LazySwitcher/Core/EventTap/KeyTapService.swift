@@ -110,6 +110,10 @@ final class KeyTapService {
     /// The callback must not call into Carbon itself, so it reads this instead.
     let secureInputMirror = AtomicCounter()
 
+    /// Which layout snapshot is in force, as a number. Written by the main
+    /// thread when the layout changes, stamped onto every keystroke.
+    let layoutEpoch = AtomicCounter()
+
     // MARK: - Delivered elsewhere
 
     /// A word just ended. Delivered on `decideQueue`, never on the tap thread.
@@ -126,6 +130,45 @@ final class KeyTapService {
 
     /// Mach absolute time of the last keystroke, for the idle timeout.
     private let lastKeystrokeTime = AtomicCounter()
+
+    /// How long ago the last real keystroke was, in seconds. Readable from any
+    /// thread for the cost of a load.
+    ///
+    /// Used to tell "the person finished a word" from "the person is in the
+    /// middle of a burst". A replacement is a run of synthetic events with
+    /// pauses between them, and a keystroke landing inside that run is deleted
+    /// by our own backspaces: «rfr ltkf» typed at thirty milliseconds a key
+    /// came back as «rкак ела». Nothing can be checked once the burst has
+    /// started, so the only honest question is asked before it: has this person
+    /// stopped typing?
+    /// Seconds between the last two keystrokes — the person's current rhythm.
+    ///
+    /// Clamped: one interval is a noisy estimate, and neither a stuck key nor a
+    /// coffee break should decide how long our burst may be.
+    func recentTypingInterval() -> Double {
+        let ticks = lastInterval.value
+        // Nothing typed yet: answer with the slowest rhythm we ever assume,
+        // not with infinity. Infinity propagates into arithmetic and overflows
+        // — it once made every replacement wait for a pause that could not
+        // arrive, which took the undo with it.
+        guard ticks != 0 else { return Self.slowestAssumedRhythm }
+        return min(Self.slowestAssumedRhythm, max(0.020, Double(ticks) * Self.machToSeconds))
+    }
+
+    static let slowestAssumedRhythm: Double = 0.400
+
+    private let lastInterval = AtomicCounter()
+
+    /// "Nobody has typed for ages" as a number that survives arithmetic.
+    static let longSilence: Double = 3600
+
+    func secondsSinceLastKeystroke() -> Double {
+        let previous = lastKeystrokeTime.value
+        guard previous != 0 else { return Self.longSilence }
+        let now = mach_absolute_time()
+        guard now > previous else { return 0 }
+        return Double(now - previous) * Self.machToSeconds
+    }
 
     /// Bumped on every event that can move the caret or change the text.
     ///
@@ -616,6 +659,10 @@ final class KeyTapService {
             }
 
             expireBufferIfIdle(owner, now: now)
+            let previousKeystroke = lastKeystrokeTime.value
+            if previousKeystroke != 0, now > previousKeystroke {
+                lastInterval.value = now - previousKeystroke
+            }
             lastKeystrokeTime.value = now
             inputGeneration.bump()
 
@@ -628,7 +675,8 @@ final class KeyTapService {
             let chord = flags.contains(.maskCommand)
                      || flags.contains(.maskControl)
                      || flags.contains(.maskAlternate)
-            let record = KeyRecord(event: event, timestamp: now)
+            let record = KeyRecord(event: event, timestamp: now,
+                                   layout: UInt32(truncatingIfNeeded: layoutEpoch.value))
 
             let outcome = owner.buffer.append(record, hasCommandControlOrOption: chord,
                                               endsSentence: endsSentence(record))
